@@ -1,0 +1,38 @@
+# Implementation Status and Audit
+
+This status reflects the current repository implementation. Local/demo workflows are distinct from production integrations; a passing local flow is not evidence of legal approval or a live vendor connection.
+
+## Implemented locally
+
+- Store Listen routes cover dashboard, live monitor, conversations and transcripts, opportunities, sales intelligence, stores, employees, reports, POS, analytics, alerts, settings, store rules, and stock catalog management.
+- Login uses seeded development accounts, hashed passwords, expiring JWTs, role checks, and store-scoped query filtering. All application persistence uses MongoDB collections; startup verifies the connection and ensures indexes. SQLite-to-Mongo import is idempotent and preserves the source file.
+- Browser microphone capture runs one session and rotates self-contained short WebM/Opus clips while queued transcription proceeds independently. Clips are retained under a generated server-side key, listed with pagination, and streamed for playback only after store-scope authorization. Audio is deleted on API startup after the configured retention period (7 days by default). Local faster-whisper transcription stores original and translated text separately, with clip offsets preserving transcript order. Shared-mic clips default to unknown; customer/staff labels are operator-selected, not acoustically identified. This is not a dedicated edge recorder and has not been verified for uninterrupted store-hours capture on production hardware.
+- Speech and AI provider abstractions exist. Mock AI supplies demo tips; optional OpenAI analysis needs credentials. The noted Grok/Gork vendor remains unconfirmed.
+- Opportunity suggestions, manager review, confidence labels, and store/time/product/employee POS matching are implemented. Matches remain probabilistic.
+- Daily, weekly, and monthly reports use store-local calendar windows. Manager/admin users can generate and persist a store/date daily report with conversation, transcript, retained-audio, opportunity, POS transaction/revenue, and top-intent metrics. The report includes text-based question/brief-acknowledgement counts only for operator-labeled staff clips, and says attribution is insufficient otherwise. Day-close runs the configured summary provider over aggregate metrics; demo mode uses mock rules, and OpenAI can be configured. A missing POS match is never presented as proof of why a sale did not occur.
+- Daily report generation is explicit rather than schedule-triggered: the live screen's `End day & generate report` action waits for queued clips, finishes the capture session, and calls the manager-protected report endpoint. No store closing time or unattended schedule is configured; the report page can also generate or regenerate a report separately.
+- Dashboard store totals, store-local conversations-today, seven-day UTC conversation trend, language distribution, POS revenue, retained listening time, and recorder counts are database-derived. Average response time is returned as unavailable because the product does not yet record reliable response timestamps; the UI must not invent one.
+- Live transcription uploads have a longer bounded client timeout than ordinary API requests to accommodate local Whisper CPU inference. Empty-speech and unsupported-language responses are handled without creating a transcript segment or breaking the live capture UI.
+- Stock and store-rule CRUD is store-scoped and audited. Active rules can drive low-confidence, reviewable coaching suggestions. The Settings area presents provider, device, access, and retention details as read-only; it does not claim unimplemented configuration writes.
+- Destructive confirmations use a shared accessible in-app dialog rather than browser-native prompts.
+- POS demo transactions and a mock webhook flow persist to the configured database. The POS provider interface is ready for an adapter, but no real POS vendor adapter is included.
+- WebSocket auth uses the `storelisten.v1` subprotocol rather than query tokens. Redis Pub/Sub fanout is implemented for multi-worker store/dashboard event delivery; local development can fall back to process-local delivery. Production requires TLS Redis. Events are still transient (no durable outbox/replay), and active transcript history is reloaded after reconnect.
+- Devcore has marketing pages, login, a persisted API-backed Kanban/task board, and five separate website concept routes at `/devcore/concepts`.
+- The Electron desktop recorder reports device telemetry and has jittered reconnect, release-time HTTPS API binding, encrypted device-secret storage, and device revocation support. The Python Store Agent still does not capture audio or submit health telemetry.
+- CI runs backend tests against an isolated in-memory Mongo-compatible database, frontend build, and desktop tests. Browser E2E, installer smoke tests, and Windows hardware tests remain unconfigured.
+- Backend tests cover authentication, scope, transcription metadata, reports, POS matching, WebSockets, store rules, stock CRUD, rule-to-coaching behavior, and dashboard metric integrity. Frontend production build is available; automated browser E2E and component tests are not configured.
+
+## Known gaps and external dependencies
+
+- Browser and Electron capture work locally, but production store hardware, always-on edge capture validation, audio buffering, idempotent offline replay, and a full store-hours soak test remain open.
+- No client POS vendor, API documentation, or credentials have been provided. Therefore live POS ingestion cannot be implemented or verified; current POS data is explicitly mock/demo data.
+- Speech transcription is local Whisper. Translation uses the speech model's translation task; there is no separately configurable production translation service or speaker diarization/acoustic identity.
+- AI analysis can use mock rules or optional OpenAI credentials. Daily OpenAI summaries receive aggregate metrics, not raw audio. There is no validated production sales model or evidence-calibrated missed-opportunity classifier.
+- Employee performance fields remain incomplete/seeded rather than fully calculated from complete event-level interactions. Average response time, customer counts, objective compliance, and employee quality scores are unavailable without additional timestamped workflow signals; they must not be presented as measured facts. Reports do not yet provide a full employee leaderboard.
+- Atlas connectivity has been verified, but production operations still require backup/restore drills, TLS Redis event fanout, and device-secret revocation deployment. Durable outbox/background queues, shared cloud audio storage (no S3 adapter yet), complete audit coverage, raw-audio/transcript deletion, PII redaction, and production monitoring remain incomplete. Production configuration intentionally fails until real AI/POS and shared-storage adapters exist.
+- Devcore concept pages are design alternatives, not five separately deployed domains or authenticated selectable production themes.
+- Recording consent and notice requirements, retention periods, jurisdictions, and compliance approvals require client/legal review. This project does not claim PCI, SOC 2, or other certification.
+
+## Production release gate
+
+Do not deploy for live retail recording or employee evaluation until the client confirms POS vendor/API access, capture hardware, jurisdictions, recording notice/consent, retention/deletion policy, cloud environment, and identity provider. Complete and review edge-device security, durable event processing, production database operations, privacy controls, and operational monitoring before connecting stores.

@@ -1,0 +1,26 @@
+@baseUrl = http://127.0.0.1:8000
+@token = <paste token here>
+
+### Dashboard summary
+GET {{baseUrl}}/api/v1/dashboard/summary
+Authorization: Bearer {{token}}
+
+### List stores
+GET {{baseUrl}}/api/v1/stores?page=1&page_size=25
+Authorization: Bearer {{token}}
+
+### Store detail
+GET {{baseUrl}}/api/v1/stores/store-001
+Authorization: Bearer {{token}}
+
+### Conversations list
+GET {{baseUrl}}/api/v1/conversations?page=1&page_size=25
+Authorization: Bearer {{token}}
+
+### Conversation detail
+GET {{baseUrl}}/api/v1/conversations/conv-1001
+Authorization: Bearer {{token}}
+
+### Transcript
+GET {{baseUrl}}/api/v1/conversations/conv-1001/transcript
+Authorization: Bearer {{token}}

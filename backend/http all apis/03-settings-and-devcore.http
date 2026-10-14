@@ -1,0 +1,62 @@
+@baseUrl = http://127.0.0.1:8000
+@token = <paste token here>
+
+### Employees list
+GET {{baseUrl}}/api/v1/employees
+Authorization: Bearer {{token}}
+
+### Employee detail
+GET {{baseUrl}}/api/v1/employees/employee-001
+Authorization: Bearer {{token}}
+
+### Employee performance
+GET {{baseUrl}}/api/v1/employees/employee-001/performance
+Authorization: Bearer {{token}}
+
+### Settings view
+GET {{baseUrl}}/api/v1/settings
+Authorization: Bearer {{token}}
+
+### Register device
+POST {{baseUrl}}/api/v1/devices/register
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "store_id": "store-001",
+  "name": "QA Edge Device",
+  "audio_source": "microphone"
+}
+
+### Demo replay
+POST {{baseUrl}}/api/v1/demo/replay?store_id=store-001
+Authorization: Bearer {{token}}
+
+### Devcore tasks
+GET {{baseUrl}}/api/v1/devcore/tasks
+Authorization: Bearer {{token}}
+
+### Create devcore task
+POST {{baseUrl}}/api/v1/devcore/tasks
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "title": "API audit",
+  "project_id": "proj-storelisten",
+  "status": "todo",
+  "priority": "high",
+  "assignee": "",
+  "due_date": null,
+  "labels": "api,qa"
+}
+
+### Patch devcore task
+PATCH {{baseUrl}}/api/v1/devcore/tasks/task-1234
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "status": "review",
+  "priority": "high"
+}

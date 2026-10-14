@@ -1,0 +1,86 @@
+@baseUrl = http://127.0.0.1:8000
+@token = <paste token here>
+
+### Audio transcribe (WebM upload example)
+# Works with browser-recorded audio in WebM/Opus format.
+POST {{baseUrl}}/api/v1/audio/transcribe
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="store_id"
+
+store-001
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="speaker_role"
+
+customer
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="conversation_id"
+
+conv-1001
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="audio"; filename="customer-clip.webm"
+Content-Type: audio/webm
+
+< ./sample-customer.webm
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+### Opportunities
+GET {{baseUrl}}/api/v1/opportunities
+Authorization: Bearer {{token}}
+
+### Review opportunity
+PATCH {{baseUrl}}/api/v1/opportunities/opp-2002
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "status": "CONVERTED",
+  "manager_note": "Follow-up confirmed by manager."
+}
+
+### Sales intelligence
+GET {{baseUrl}}/api/v1/sales-intelligence
+Authorization: Bearer {{token}}
+
+### Reports daily
+GET {{baseUrl}}/api/v1/reports/daily
+Authorization: Bearer {{token}}
+
+### Reports weekly
+GET {{baseUrl}}/api/v1/reports/weekly
+Authorization: Bearer {{token}}
+
+### Reports monthly
+GET {{baseUrl}}/api/v1/reports/monthly
+Authorization: Bearer {{token}}
+
+### Alerts
+GET {{baseUrl}}/api/v1/alerts
+Authorization: Bearer {{token}}
+
+### POS transactions
+GET {{baseUrl}}/api/v1/pos/transactions
+Authorization: Bearer {{token}}
+
+### Create demo POS transaction
+POST {{baseUrl}}/api/v1/pos/demo
+Authorization: Bearer {{token}}
+
+### POS webhook sample
+POST {{baseUrl}}/api/v1/pos/webhook
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "store_id": "store-001",
+  "employee_id": "employee-001",
+  "sku": "CHG-USBC",
+  "name": "USB-C Charger",
+  "amount": 19.99
+}
+
+### Analytics
+GET {{baseUrl}}/api/v1/analytics
+Authorization: Bearer {{token}}

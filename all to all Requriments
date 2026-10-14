@@ -1,0 +1,2045 @@
+You are a senior staff-level full-stack engineer, software architect, AI/ML engineer, product designer, UX engineer, DevOps engineer, and security engineer.
+
+Your job is to build a complete, professional, premium-quality, production-oriented full-stack software platform called:
+
+STORE LISTEN
+
+Do NOT build a simple demo dashboard.
+Do NOT build a static UI mockup.
+Do NOT create fake-looking AI UI.
+Do NOT leave the core architecture as placeholders.
+
+Build a serious, scalable, enterprise-grade foundation with a polished frontend, backend, database, real-time communication layer, store-side agent architecture, AI processing abstraction, reporting system, POS integration abstraction, documentation, testing, and a realistic demo mode.
+
+The product is intended for US retail stores.
+
+============================================================
+1. BUSINESS CONTEXT
+============================================================
+
+The client operates/serves physical retail stores in the USA.
+
+The goal of Store Listen is to understand customer/employee conversations happening inside retail stores and turn those conversations into actionable business intelligence.
+
+The system should eventually be able to:
+
+1. Capture store conversations in real time.
+2. Transcribe conversations.
+3. Detect spoken language.
+4. Support English and Spanish.
+5. Translate Spanish speech into English for the dashboard.
+6. Identify/separate speakers where technically possible.
+7. Detect customer intent.
+8. Detect product/service opportunities.
+9. Detect potentially missed customers or missed sales opportunities.
+10. Provide real-time sales recommendations/tips.
+11. Generate daily performance reports.
+12. Correlate conversation intelligence with POS transactions.
+13. Analyze employee performance.
+14. Analyze store performance.
+15. Provide multi-store management.
+16. Provide a professional live monitoring dashboard.
+
+The key business outcome is NOT transcription alone.
+
+The key business outcome is:
+
+"Can we determine whether a customer was properly served, whether a sales opportunity was identified, whether the employee acted on it, and whether the opportunity eventually resulted in a POS transaction?"
+
+Example:
+
+Customer:
+"I need a charger for my phone."
+
+Employee:
+"Okay."
+
+The system should potentially identify:
+
+Customer intent:
+Phone charger
+
+Potential opportunity:
+Charger sale
+
+Potential sales tip:
+"Ask the customer which connector/type they need."
+
+If no related sale appears in the POS data, the system may classify it as:
+
+Potential Missed Sales Opportunity
+
+This must be presented as an AI-generated insight with confidence/status, NOT as an unquestionable fact.
+
+============================================================
+2. REQUIREMENTS FROM THE CLIENT'S PROVIDED IMAGE
+============================================================
+
+The original requirements include the following:
+
+STORE LISTEN — V1
+
+- Live voice recording
+- Daily reports on performance
+- On-device high-quality voice recording and transcription
+- Recording
+- Transcription using Whisper
+- Reporting/analysis using a tool referred to in the notes as "Gork"/possibly "Grok" — do not assume this blindly; create a provider abstraction and document this ambiguity.
+- End result should help determine if a customer was missed.
+- Example: a customer comes into the store and the representative fails to ask/offering an accessory such as a charger.
+
+STORE LISTEN — V2
+
+- Improved live voice recording
+- Improved daily performance reports
+- Live translation with transcription
+- Live sales intelligence
+- Example: customer comes to get a wire/cable
+- The translated/live screen should be capable of showing a useful sales tip/recommendation, such as suggesting the appropriate plug/connector/product question.
+- Proper POS-integrated reporting.
+
+DEVCORE / COMPANY WEBSITE REQUIREMENTS
+
+V1:
+- Very good-looking professional website.
+- Multiple design versions/concepts may be created and the best versions retained.
+
+V2:
+- Multiple polished website versions/concepts.
+- Login.
+- Dashboard.
+- Kanban-style functionality.
+
+Services listed:
+- Shopify
+- Web development
+- Software development
+- Automations
+- etc.
+
+Treat Devcore's marketing/company website as conceptually separate from the Store Listen product application.
+
+============================================================
+3. CRITICAL ARCHITECTURAL PRINCIPLE
+============================================================
+
+DO NOT assume that a POS automatically provides ambient store conversation audio.
+
+The system must be designed around a pluggable audio source.
+
+Possible production audio sources include:
+
+- Store microphone
+- POS-connected microphone
+- Existing audio hardware
+- IP/CCTV audio where legally and technically available
+- Dedicated store computer microphone
+- Existing third-party audio platform
+- Future approved audio provider
+
+Create an Audio Source Adapter interface so the application is not tied to one hardware/vendor.
+
+Example conceptual architecture:
+
+Audio Source
+    ↓
+Store Edge Agent
+    ↓
+Secure Streaming
+    ↓
+Backend Audio Ingestion
+    ↓
+Speech Processing
+    ↓
+Transcription
+    ↓
+Language Detection
+    ↓
+Translation
+    ↓
+Speaker Diarization
+    ↓
+Conversation Intelligence
+    ↓
+Sales Intelligence
+    ↓
+POS Correlation
+    ↓
+Database
+    ↓
+WebSocket
+    ↓
+Next.js Dashboard
+
+============================================================
+4. REQUIRED SYSTEM ARCHITECTURE
+============================================================
+
+Use a monorepo.
+
+Recommended structure:
+
+/
+├── apps/
+│   ├── web/
+│   ├── api/
+│   └── store-agent/
+│
+├── packages/
+│   ├── shared-types/
+│   ├── ui/
+│   ├── config/
+│   └── event-contracts/
+│
+├── docs/
+│
+├── infrastructure/
+│
+├── scripts/
+│
+├── docker-compose.yml
+├── .env.example
+├── README.md
+└── package/workspace configuration
+
+If you determine that a slightly different structure is technically superior, explain why in ARCHITECTURE.md and use the improved structure.
+
+============================================================
+5. FRONTEND
+============================================================
+
+Use:
+
+- Next.js
+- TypeScript
+- App Router
+- Tailwind CSS
+- shadcn/ui or equivalent accessible component system
+- React Query/TanStack Query where appropriate
+- WebSocket client for live events
+- Strong type safety
+- Form validation
+- Responsive design
+
+The frontend must feel like a premium enterprise SaaS product.
+
+It must NOT look like a generic AI-generated dashboard.
+
+Avoid:
+
+- Excessive gradients
+- Excessive glassmorphism
+- Random glowing cards
+- Giant AI icons
+- Purple/blue "AI startup" visual clichés
+- Excessive rounded cards
+- Unnecessary animations
+- Decorative elements that hurt usability
+
+Use:
+
+- Sophisticated typography
+- Strong spacing system
+- Excellent hierarchy
+- Clean tables
+- Subtle shadows
+- Refined borders
+- Meaningful status indicators
+- Professional charts
+- Smooth micro-interactions
+- Excellent empty states
+- Loading states
+- Skeletons
+- Error states
+- Responsive layouts
+- Keyboard accessibility
+- Light and dark themes if appropriate
+
+The visual language should feel like a high-end enterprise operations platform.
+
+Think:
+
+"Mission Control + Retail Operations + Conversation Intelligence"
+
+not:
+
+"AI toy dashboard".
+
+============================================================
+6. FRONTEND ROUTES
+============================================================
+
+Implement at minimum:
+
+/login
+
+/dashboard
+
+/live
+
+/conversations
+
+/conversations/[id]
+
+/opportunities
+
+/sales-intelligence
+
+/employees
+
+/employees/[id]
+
+/stores
+
+/stores/[id]
+
+/reports
+
+/reports/daily
+
+/reports/weekly
+
+/pos
+
+/analytics
+
+/alerts
+
+/settings
+
+/settings/stores
+
+/settings/devices
+
+/settings/integrations
+
+/settings/users
+
+/settings/ai
+
+/settings/security
+
+============================================================
+7. MAIN DASHBOARD
+============================================================
+
+The main dashboard should show:
+
+- Active stores
+- Online/offline stores
+- Live conversations
+- Conversations today
+- Potential missed opportunities
+- Sales opportunities
+- Converted opportunities
+- Conversion rate
+- Employee performance
+- Store performance
+- Average response time
+- Language distribution
+- Recent alerts
+- Recent conversations
+- Daily performance trend
+- POS correlation metrics
+
+Use real API-driven data.
+
+For development/demo mode, provide realistic seeded data.
+
+Never make the UI dependent on hardcoded static arrays inside components.
+
+============================================================
+8. LIVE CONVERSATION SCREEN
+============================================================
+
+This is the HERO FEATURE.
+
+Build a premium live monitoring interface.
+
+It should include:
+
+- Store selector
+- Store online status
+- Device connection status
+- Live indicator
+- Conversation timer
+- Audio status
+- Current speaker
+- Transcript stream
+- Partial transcript
+- Final transcript
+- Original language
+- English translation
+- Timestamp
+- Confidence score where available
+- Speaker labels
+- AI sales tip
+- Customer intent
+- Detected product
+- Opportunity status
+- Potential missed opportunity
+- POS correlation when available
+
+Example:
+
+CUSTOMER
+"I need a charger for my iPhone."
+
+AI SALES TIP
+"Ask which connector the customer needs."
+
+INTENT
+Phone charger
+
+OPPORTUNITY
+Accessory / charger
+
+STATUS
+Potential opportunity
+
+The UI must update without page refresh.
+
+Use WebSockets.
+
+============================================================
+9. REAL-TIME EVENT ARCHITECTURE
+============================================================
+
+Create typed event contracts.
+
+Example events:
+
+transcript.partial
+transcript.final
+speaker.detected
+language.detected
+translation.updated
+conversation.started
+conversation.ended
+intent.detected
+opportunity.detected
+sales_tip.generated
+missed_opportunity.detected
+pos.transaction.received
+pos.transaction.matched
+store.connected
+store.disconnected
+device.health.updated
+alert.created
+
+Example event:
+
+{
+  "event": "transcript.final",
+  "conversationId": "...",
+  "segmentId": "...",
+  "storeId": "...",
+  "speakerId": "...",
+  "language": "es",
+  "originalText": "¿Cuánto cuesta este producto?",
+  "translatedText": "How much does this product cost?",
+  "confidence": 0.94,
+  "timestamp": "...",
+  "isFinal": true
+}
+
+All event schemas must be strongly typed.
+
+============================================================
+10. BACKEND
+============================================================
+
+Use:
+
+Python
+FastAPI
+Pydantic
+SQLAlchemy
+Alembic
+PostgreSQL
+Redis
+
+Backend responsibilities:
+
+- Authentication/authorization
+- Store management
+- Device management
+- Audio ingestion
+- WebSocket connections
+- Transcript processing
+- AI processing
+- Translation
+- Conversation management
+- Opportunity detection
+- Sales intelligence
+- POS integration
+- Reporting
+- Analytics
+- Audit logging
+- Health monitoring
+
+Use clean architecture / modular architecture.
+
+Separate:
+
+API
+Domain
+Services
+Infrastructure
+Database
+AI providers
+External integrations
+Event system
+
+Do not create one giant backend file.
+
+============================================================
+11. DATABASE
+============================================================
+
+Use PostgreSQL.
+
+Create proper migrations.
+
+At minimum include:
+
+organizations
+
+stores
+
+store_devices
+
+users
+
+roles
+
+permissions
+
+employees
+
+conversations
+
+conversation_participants
+
+transcript_segments
+
+audio_sessions
+
+customer_intents
+
+products
+
+product_opportunities
+
+sales_recommendations
+
+missed_opportunities
+
+pos_transactions
+
+pos_transaction_items
+
+conversation_pos_matches
+
+employee_performance
+
+store_performance
+
+daily_reports
+
+alerts
+
+audit_logs
+
+ai_processing_runs
+
+integration_connections
+
+============================================================
+12. TRANSCRIPT SEGMENTS
+============================================================
+
+A transcript segment should support:
+
+id
+conversation_id
+speaker_id
+language
+original_text
+translated_text
+start_time
+end_time
+confidence
+is_final
+created_at
+
+Do NOT overwrite the original transcript when translating.
+
+Always preserve original language text separately.
+
+============================================================
+13. SPEAKER DIARIZATION
+============================================================
+
+Support speaker separation conceptually.
+
+Example:
+
+Speaker 01
+Speaker 02
+
+Optionally map speakers to:
+
+Customer
+Employee
+
+but do not falsely claim identity unless reliable evidence exists.
+
+The architecture should allow future speaker identification.
+
+============================================================
+14. LANGUAGE SUPPORT
+============================================================
+
+At minimum support:
+
+English
+Spanish
+
+For English:
+
+Original:
+"This product costs three dollars."
+
+English display:
+"This product costs three dollars."
+
+For Spanish:
+
+Original:
+"¿Cuánto cuesta este producto?"
+
+English display:
+"How much does this product cost?"
+
+Store both.
+
+Design the architecture so additional languages can be added later.
+
+============================================================
+15. SPEECH-TO-TEXT
+============================================================
+
+The requirements specifically mention Whisper.
+
+Create a SpeechProvider interface.
+
+Example:
+
+SpeechProvider
+├── WhisperProvider
+├── CloudSpeechProvider
+└── MockSpeechProvider
+
+The first implementation should support Whisper/faster-whisper where practical.
+
+The provider must be configurable through environment variables.
+
+Do not hardcode a single vendor throughout the codebase.
+
+This allows future switching between:
+
+- local Whisper
+- cloud speech provider
+- another speech provider
+
+without rewriting the application.
+
+============================================================
+16. ON-DEVICE / EDGE PROCESSING
+============================================================
+
+Create a Store Agent application.
+
+Purpose:
+
+- Capture microphone/audio
+- Device health
+- Audio level monitoring
+- Secure authentication
+- Streaming
+- Reconnection
+- Local buffering
+- Optional local transcription
+- Configuration
+- Logging
+
+The agent should support:
+
+- automatic reconnect
+- exponential backoff
+- heartbeat
+- device registration
+- secure device token
+- health reporting
+- graceful shutdown
+
+Do not make the Store Agent depend on the UI.
+
+It should work as an independent service.
+
+============================================================
+17. STORE AGENT SECURITY
+============================================================
+
+Never embed master API keys inside the Store Agent.
+
+Use device-specific credentials.
+
+Use:
+
+- short-lived tokens where possible
+- device registration
+- TLS
+- secure storage
+- token rotation strategy
+- revocation support
+- audit logs
+
+============================================================
+18. AUDIO HANDLING
+============================================================
+
+Create an abstraction:
+
+AudioSource
+
+Possible implementations:
+
+MicrophoneAudioSource
+FileAudioSource
+MockAudioSource
+FuturePosAudioSource
+
+For local development, provide a sample audio/file source.
+
+Do NOT require actual physical microphone hardware to run the entire project locally.
+
+============================================================
+19. DEMO MODE
+============================================================
+
+This is mandatory.
+
+Create a realistic DEMO MODE.
+
+A developer should be able to run the project without:
+
+- physical store
+- actual POS
+- actual microphone
+- paid AI API
+
+Demo mode should simulate:
+
+- Store coming online
+- Device connection
+- Live conversation
+- Partial transcript
+- Final transcript
+- Spanish conversation
+- English translation
+- Speaker changes
+- AI sales tip
+- Opportunity detection
+- Missed opportunity
+- POS transaction
+- POS match
+- Alerts
+
+The live transcript should arrive gradually rather than appearing as one static block.
+
+Make the demo convincing.
+
+============================================================
+20. AI PROVIDER ARCHITECTURE
+============================================================
+
+Create an AI provider abstraction.
+
+Example:
+
+AIAnalysisProvider
+
+Implement:
+
+MockAIProvider
+
+Keep interfaces ready for:
+
+- Grok
+- OpenAI
+- Azure/OpenAI-compatible models
+- other future providers
+
+The client notes mention something that appears to be "Gork"/"Grok".
+
+Do NOT hardcode Grok-specific implementation unless configuration confirms it.
+
+Create:
+
+AI_PROVIDER=mock
+
+and allow future:
+
+AI_PROVIDER=grok
+
+The application must continue working without an AI API key by using MockAIProvider in development/demo mode.
+
+============================================================
+21. AI ANALYSIS
+============================================================
+
+The AI analysis pipeline should identify:
+
+customer intent
+product/service intent
+purchase intent
+questions
+objections
+employee response
+potential sales opportunity
+cross-sell opportunity
+upsell opportunity
+missed opportunity
+recommended next action
+confidence
+
+Example:
+
+Customer:
+"I need a cable for my phone."
+
+Analysis:
+
+{
+  "intent": "purchase_accessory",
+  "product": "phone cable",
+  "opportunity": true,
+  "recommendation": "Ask which connector the customer needs",
+  "confidence": 0.89
+}
+
+Do not present uncertain AI results as absolute facts.
+
+Use labels such as:
+
+Potential Opportunity
+Likely Missed Opportunity
+High Confidence
+Medium Confidence
+Low Confidence
+
+============================================================
+22. SALES TIP ENGINE
+============================================================
+
+Create a sales recommendation service.
+
+Example:
+
+Customer:
+"I need a charger."
+
+Recommendation:
+
+"Ask which device/model the customer is using before recommending a charger."
+
+Another example:
+
+Customer:
+"I bought a phone."
+
+Recommendation:
+
+"Consider offering a compatible charging cable or protective accessory."
+
+Sales recommendations must be contextual and concise.
+
+Avoid spammy recommendations.
+
+============================================================
+23. MISSED OPPORTUNITY ENGINE
+============================================================
+
+Create a rules + AI hybrid architecture.
+
+Potential logic:
+
+Customer intent detected
++
+Relevant product opportunity
++
+Employee response
++
+POS outcome if available
+=
+Opportunity assessment
+
+Statuses:
+
+OPEN
+CONVERTED
+MISSED
+UNKNOWN
+REVIEW_REQUIRED
+
+Do not automatically label something as "missed" unless confidence/rules support it.
+
+Allow managers to manually review and override AI classification.
+
+============================================================
+24. POS INTEGRATION
+============================================================
+
+IMPORTANT:
+
+Do NOT assume the client's POS vendor.
+
+Create a POSProvider interface.
+
+Example:
+
+POSProvider
+
+Implement:
+
+MockPOSProvider
+
+Prepare adapters for future:
+
+Square
+Clover
+Shopify POS
+Lightspeed
+Custom POS
+etc.
+
+Do NOT install or hardcode all of these.
+
+The actual POS adapter should be implemented only after the client confirms the POS vendor/API.
+
+Support:
+
+- transactions
+- transaction items
+- employee association where available
+- product IDs
+- timestamps
+- amounts
+- store IDs
+
+============================================================
+25. CONVERSATION ↔ POS MATCHING
+============================================================
+
+Create a matching service.
+
+Possible signals:
+
+- store
+- employee
+- time window
+- product
+- transaction amount
+- customer intent
+- conversation timing
+
+Example:
+
+Conversation:
+
+10:32
+Customer wants charger.
+
+POS:
+
+10:35
+USB-C charger sold.
+
+System:
+
+Conversation opportunity:
+CONVERTED
+
+confidence:
+0.91
+
+Never claim a match is certain unless the POS provides a reliable identifier.
+
+============================================================
+26. REPORTING
+============================================================
+
+Build daily reports.
+
+Report should include:
+
+- total conversations
+- customers detected
+- potential opportunities
+- converted opportunities
+- potential missed opportunities
+- conversion rate
+- employee performance
+- store performance
+- language distribution
+- top customer intents
+- top products
+- response time
+- recommendations
+
+Create:
+
+Daily
+Weekly
+Monthly
+
+report structures.
+
+============================================================
+27. EMPLOYEE PERFORMANCE
+============================================================
+
+Create an employee performance dashboard.
+
+Metrics can include:
+
+- Conversations handled
+- Opportunities detected
+- Opportunities converted
+- Potential missed opportunities
+- Conversion rate
+- Average response time
+- Customer engagement indicators
+- AI confidence distribution
+
+Avoid presenting AI-derived employee scores as objective truth.
+
+Clearly label them as:
+
+AI-assisted metrics.
+
+============================================================
+28. STORE PERFORMANCE
+============================================================
+
+Create store-level analytics:
+
+- conversations
+- customers
+- opportunities
+- conversions
+- missed opportunities
+- sales correlation
+- employee performance
+- language distribution
+- trends
+
+Support multi-store filtering.
+
+============================================================
+29. ALERTS
+============================================================
+
+Create alerts such as:
+
+Potential missed opportunity
+Store offline
+Audio device disconnected
+High transcription failure rate
+POS disconnected
+AI processing delayed
+Low audio quality
+
+Use severity:
+
+INFO
+WARNING
+CRITICAL
+
+============================================================
+30. DEVICE HEALTH
+============================================================
+
+Store Agent should report:
+
+- connected/disconnected
+- last heartbeat
+- CPU
+- memory
+- audio status
+- microphone status
+- stream status
+- processing latency
+- version
+
+Dashboard should show device health.
+
+============================================================
+31. AUTHENTICATION
+============================================================
+
+Implement proper authentication architecture.
+
+Roles:
+
+SUPER_ADMIN
+ORG_ADMIN
+STORE_MANAGER
+SUPERVISOR
+EMPLOYEE
+VIEWER
+
+Implement RBAC.
+
+Do not expose all stores/data to every user.
+
+Store managers should only see authorized stores.
+
+============================================================
+32. SECURITY
+============================================================
+
+Implement:
+
+- password hashing if password auth is used
+- secure sessions
+- JWT or secure session architecture
+- RBAC
+- request validation
+- rate limiting
+- CORS configuration
+- CSRF protection where applicable
+- secure headers
+- audit logs
+- secrets through environment variables
+- no secrets in Git
+- input sanitization
+- SQL injection protection through ORM/parameterized queries
+- WebSocket authentication
+- device authentication
+
+Create SECURITY.md.
+
+============================================================
+33. PRIVACY / COMPLIANCE
+============================================================
+
+The product handles potentially sensitive voice conversations.
+
+The system must NOT assume that recording is legally permissible everywhere.
+
+Add documentation explaining that production deployment requires client/legal review of:
+
+- applicable US federal/state recording laws
+- consent/notice requirements
+- employee notice
+- customer notice
+- data retention
+- access controls
+- PII
+- payment card information
+- sensitive information
+- deletion requirements
+
+Build configurable:
+
+audio retention
+transcript retention
+data deletion
+access control
+
+Do not store raw audio permanently by default.
+
+============================================================
+34. PII / SENSITIVE DATA
+============================================================
+
+Create an architecture for future redaction.
+
+Potential sensitive data:
+
+- phone numbers
+- emails
+- addresses
+- payment information
+- names
+- account numbers
+
+Do not pretend the system is PCI/HIPAA/SOC2 compliant unless it actually is.
+
+Documentation must clearly separate:
+
+"technical capability"
+
+from
+
+"formal compliance certification".
+
+============================================================
+35. OBSERVABILITY
+============================================================
+
+Implement structured logging.
+
+Use:
+
+- request IDs
+- correlation IDs
+- conversation IDs
+- device IDs
+- store IDs
+
+Prepare integration for:
+
+Sentry
+OpenTelemetry
+Prometheus-compatible metrics where appropriate
+
+Provide health endpoints:
+
+/health
+/ready
+/metrics if implemented
+
+============================================================
+36. ERROR HANDLING
+============================================================
+
+Never expose raw stack traces to users.
+
+Frontend must have:
+
+- error boundaries
+- retry actions
+- empty states
+- loading states
+- offline state
+- reconnect state
+
+Backend must provide structured errors.
+
+============================================================
+37. PERFORMANCE
+============================================================
+
+Design for real-time performance.
+
+Targets:
+
+- transcript partial update should feel near real-time
+- WebSocket reconnect should be automatic
+- database queries should be indexed
+- pagination for historical data
+- virtualized transcript lists where necessary
+- no unnecessary re-rendering
+- efficient event subscriptions
+- Redis for transient real-time state
+- background jobs for expensive report generation
+
+Do not perform expensive AI processing synchronously inside normal HTTP request handlers.
+
+Use background workers/queues where appropriate.
+
+============================================================
+38. UI/UX QUALITY
+============================================================
+
+The UI must be premium.
+
+Create:
+
+- polished sidebar
+- top navigation
+- command/search interface if useful
+- live indicators
+- animated transcript updates
+- professional charts
+- rich tables
+- filters
+- date ranges
+- store selector
+- employee selector
+- language filter
+- opportunity filter
+- confidence filter
+
+Animations must be subtle and purposeful.
+
+Use consistent:
+
+- spacing
+- typography
+- border radius
+- shadows
+- icons
+- status colors
+- chart style
+
+============================================================
+39. DESIGN SYSTEM
+============================================================
+
+Create design tokens.
+
+Include:
+
+colors
+typography
+spacing
+radius
+shadows
+transitions
+
+Do not scatter random Tailwind values throughout the application.
+
+Create reusable UI components.
+
+Examples:
+
+StatusBadge
+LiveIndicator
+MetricCard
+TranscriptMessage
+SpeakerBadge
+ConfidenceBadge
+OpportunityCard
+SalesTipCard
+StoreStatus
+DeviceHealth
+PerformanceChart
+DataTable
+EmptyState
+ErrorState
+LoadingSkeleton
+Modal
+Drawer
+CommandPalette
+
+============================================================
+40. DEVCORE WEBSITE
+============================================================
+
+Build a separate professional marketing website for Devcore.
+
+Pages:
+
+Home
+Services
+About
+Work/Portfolio
+Process
+Contact
+Login
+
+Services:
+
+Shopify
+Web Development
+Software Development
+Automation
+Other services
+
+The website should look like a premium technology/software agency.
+
+Do not make it look like a generic template.
+
+Create strong:
+
+hero
+services
+case studies
+process
+technology
+testimonials placeholder
+CTA
+footer
+
+Use professional copy.
+
+Do not invent fake client logos or fake awards.
+
+If placeholders are required, label them clearly.
+
+============================================================
+41. DEVCORE DASHBOARD / KANBAN
+============================================================
+
+Create a basic authenticated dashboard.
+
+Include:
+
+Overview
+Projects
+Kanban
+Tasks
+Activity
+Settings
+
+Kanban columns:
+
+Backlog
+Todo
+In Progress
+Review
+Done
+
+Support:
+
+drag/drop
+task creation
+priority
+assignee
+due date
+status
+labels
+
+Persist data through backend APIs.
+
+============================================================
+42. DEMO DATA
+============================================================
+
+Seed realistic data.
+
+Stores:
+
+Store 001
+Store 002
+Store 003
+
+Employees:
+
+realistic placeholder names
+
+Conversations:
+
+English
+Spanish
+
+Examples:
+
+Customer wants charger
+Customer wants cable
+Customer asks price
+Customer asks for product availability
+Customer asks for accessory
+Customer leaves without purchase
+
+Create corresponding opportunities and POS transactions.
+
+============================================================
+43. SAMPLE LIVE DEMO
+============================================================
+
+Create a demo scenario:
+
+Store 001 comes online.
+
+A conversation begins.
+
+Customer speaks Spanish:
+
+"¿Tiene un cargador para iPhone?"
+
+System gradually displays:
+
+Original:
+¿Tiene un cargador para iPhone?
+
+Translation:
+Do you have an iPhone charger?
+
+AI detects:
+
+Intent:
+Charger purchase
+
+Then display:
+
+AI SALES TIP
+"Ask which iPhone model/connector the customer uses."
+
+Then employee responds.
+
+Then simulate POS:
+
+USB-C Charger
+$19.99
+
+System correlates the conversation with the transaction.
+
+Show:
+
+Opportunity Converted
+
+This demo must work locally without external APIs.
+
+============================================================
+44. ENVIRONMENT VARIABLES
+============================================================
+
+Create .env.example.
+
+Include conceptual variables such as:
+
+DATABASE_URL=
+REDIS_URL=
+
+JWT_SECRET=
+SESSION_SECRET=
+
+AI_PROVIDER=mock
+AI_API_KEY=
+
+SPEECH_PROVIDER=mock
+SPEECH_API_KEY=
+
+POS_PROVIDER=mock
+POS_API_KEY=
+
+STORAGE_PROVIDER=local
+
+Do not put real credentials anywhere.
+
+============================================================
+45. LOCAL DEVELOPMENT
+============================================================
+
+The project must run locally with minimal setup.
+
+Prefer:
+
+Docker Compose
+
+Services:
+
+postgres
+redis
+api
+web
+optional worker
+
+Store Agent should be runnable separately.
+
+Provide commands for:
+
+install
+dev
+build
+test
+lint
+format
+database migration
+database seed
+docker startup
+
+============================================================
+46. TESTING
+============================================================
+
+Create meaningful tests.
+
+Backend:
+
+- unit tests
+- API tests
+- authentication tests
+- opportunity detection tests
+- POS matching tests
+- WebSocket tests
+
+Frontend:
+
+- component tests
+- important interaction tests
+
+End-to-end:
+
+- login
+- dashboard
+- live conversation
+- transcript event
+- opportunity
+- POS match
+
+Do not chase meaningless 100% coverage.
+
+Focus on business-critical functionality.
+
+============================================================
+47. DOCUMENTATION
+============================================================
+
+Create:
+
+README.md
+
+docs/
+├── architecture.md
+├── requirements.md
+├── setup.md
+├── development.md
+├── deployment.md
+├── database.md
+├── api.md
+├── websocket-events.md
+├── ai-pipeline.md
+├── speech-pipeline.md
+├── store-agent.md
+├── pos-integration.md
+├── security.md
+├── privacy.md
+├── troubleshooting.md
+└── roadmap.md
+
+Also create:
+
+ARCHITECTURE_DECISIONS.md
+
+Document important decisions and alternatives.
+
+============================================================
+48. CLIENT DEPENDENCIES / OPEN QUESTIONS
+============================================================
+
+Do not hide unknowns.
+
+Create:
+
+docs/client-questions.md
+
+Include:
+
+1. Exact POS vendor?
+2. POS version?
+3. POS API documentation?
+4. What audio hardware exists?
+5. Where is audio captured?
+6. Is ambient recording permitted?
+7. Is customer notification required?
+8. Is employee notification required?
+9. Which US states are involved?
+10. Is on-device Whisper mandatory?
+11. What does "Gork/Grok" refer to?
+12. Should raw audio be stored?
+13. Retention duration?
+14. Which languages beyond English/Spanish?
+15. Where should live sales tips appear?
+16. Should recommendations appear directly on POS?
+17. Is a store-side application allowed?
+18. Which OS runs at stores?
+19. Is internet access available?
+20. What cloud environment is preferred?
+
+============================================================
+49. IMPORTANT: DO NOT FAKE EXTERNAL INTEGRATIONS
+============================================================
+
+If actual POS credentials/API are unavailable:
+
+Build a clean adapter interface and MockPOSProvider.
+
+If actual AI API credentials are unavailable:
+
+Build MockAIProvider.
+
+If actual microphone hardware is unavailable:
+
+Build FileAudioSource/MockAudioSource.
+
+The application must still run and demonstrate the complete workflow.
+
+Clearly label demo/mock integrations in the UI where appropriate.
+
+Never pretend a mock integration is a real production integration.
+
+============================================================
+50. IMPORTANT: NO HARDCODED BUSINESS LOGIC
+============================================================
+
+Do not hardcode:
+
+product names
+store IDs
+employee names
+sales values
+AI responses
+
+inside UI components.
+
+Use:
+
+database
+seed scripts
+configuration
+service layer
+
+============================================================
+51. API DESIGN
+============================================================
+
+Create REST APIs for:
+
+auth
+users
+stores
+devices
+employees
+conversations
+transcripts
+opportunities
+sales tips
+reports
+analytics
+POS
+settings
+alerts
+
+Create WebSocket endpoints for:
+
+live store stream
+live dashboard events
+
+Document all APIs.
+
+============================================================
+52. API EXAMPLE
+============================================================
+
+Example:
+
+GET /api/stores
+
+GET /api/stores/{storeId}
+
+GET /api/conversations
+
+GET /api/conversations/{conversationId}
+
+GET /api/conversations/{conversationId}/transcript
+
+GET /api/opportunities
+
+GET /api/reports/daily
+
+GET /api/employees/{employeeId}/performance
+
+POST /api/devices/register
+
+POST /api/pos/webhook
+
+WebSocket:
+
+WS /ws/dashboard
+
+WS /ws/stores/{storeId}
+
+WS /ws/device/{deviceId}
+
+Use versioning if appropriate:
+
+/api/v1/...
+
+============================================================
+53. CODE QUALITY
+============================================================
+
+Use:
+
+- strict TypeScript
+- Python type hints
+- linting
+- formatting
+- meaningful naming
+- small reusable functions
+- clean architecture
+- no dead code
+- no commented-out junk
+- no giant components
+- no giant services
+- no duplicated business logic
+
+Every important service should have a clear responsibility.
+
+============================================================
+54. ACCESSIBILITY
+============================================================
+
+Use:
+
+- semantic HTML
+- keyboard navigation
+- accessible forms
+- ARIA where needed
+- sufficient contrast
+- focus states
+- screen-reader-friendly labels
+
+============================================================
+55. RESPONSIVENESS
+============================================================
+
+The application must work well on:
+
+Desktop
+Laptop
+Tablet
+
+The primary use case is desktop operations, so optimize the main dashboard for desktop while maintaining responsive behavior.
+
+============================================================
+56. BUILD ORDER
+============================================================
+
+Do NOT randomly create files.
+
+Implement in this order:
+
+PHASE 1
+Project architecture
+Monorepo
+Tooling
+Environment
+Docker
+
+PHASE 2
+Database
+Models
+Migrations
+Seed data
+
+PHASE 3
+Backend foundation
+Authentication
+RBAC
+Stores
+Devices
+Employees
+
+PHASE 4
+Real-time event infrastructure
+Redis
+WebSockets
+Event contracts
+
+PHASE 5
+Speech abstraction
+Whisper adapter
+Mock speech provider
+
+PHASE 6
+Conversation pipeline
+
+PHASE 7
+AI analysis abstraction
+Mock AI provider
+
+PHASE 8
+Opportunity detection
+Sales tips
+Missed opportunity logic
+
+PHASE 9
+POS abstraction
+Mock POS provider
+Conversation/POS matching
+
+PHASE 10
+Reports and analytics
+
+PHASE 11
+Store Agent
+
+PHASE 12
+Next.js dashboard
+
+PHASE 13
+Live monitor
+
+PHASE 14
+Devcore website
+
+PHASE 15
+Devcore Kanban
+
+PHASE 16
+Testing
+
+PHASE 17
+Security hardening
+
+PHASE 18
+Documentation
+
+PHASE 19
+Final QA
+
+============================================================
+57. ACCEPTANCE CRITERIA
+============================================================
+
+The project is considered successful only if:
+
+1. It runs locally.
+2. Login works.
+3. Dashboard works.
+4. Demo data loads from database.
+5. Stores can be displayed.
+6. Store/device health is visible.
+7. Live demo conversation works.
+8. Transcript appears progressively.
+9. Spanish conversation is translated to English in demo mode.
+10. Speakers are displayed.
+11. AI intent is displayed.
+12. Sales tip is displayed.
+13. Potential opportunity is displayed.
+14. Potential missed opportunity can be displayed.
+15. POS transaction can be simulated.
+16. Conversation can be correlated with POS transaction.
+17. Daily reports work.
+18. Employee analytics work.
+19. Store analytics work.
+20. WebSocket events work.
+21. Reconnection works.
+22. Mock providers can be replaced with real providers.
+23. Store Agent architecture exists.
+24. Documentation exists.
+25. Tests exist.
+26. No secrets are committed.
+27. UI looks premium and production-oriented.
+28. No fake "AI magic" claims are presented as real integrations.
+29. Unknown client dependencies are documented.
+30. The application has a clear path from demo → production.
+
+============================================================
+58. FINAL PRODUCT QUALITY BAR
+============================================================
+
+The result must look like something a professional software company could present to a serious US retail client.
+
+It must NOT look like:
+
+- a student project
+- a basic CRUD application
+- a generic admin dashboard
+- an AI-generated template
+- a static prototype
+
+It should feel like a real product.
+
+Prioritize:
+
+Product quality
+Reliability
+Clarity
+Performance
+Security
+Scalability
+UX
+Maintainability
+Professional visual design
+
+============================================================
+59. IMPORTANT DEVELOPMENT RULE
+============================================================
+
+Before coding:
+
+1. Inspect the existing repository.
+2. Identify existing files.
+3. Do not unnecessarily overwrite working code.
+4. Create a short implementation plan.
+5. Create architecture documentation.
+6. Identify assumptions.
+7. Identify blockers.
+8. Then implement.
+
+If the repository is empty, initialize the complete project.
+
+Do not stop after creating a plan.
+
+Actually implement the system.
+
+============================================================
+60. DO NOT ASK FOR INFORMATION THAT IS NOT REQUIRED TO START
+============================================================
+
+If an external integration is unknown, implement an adapter/mock.
+
+Do not block development because:
+
+- POS vendor is unknown
+- API credentials are unavailable
+- microphone is unavailable
+- AI key is unavailable
+
+Instead create clean interfaces and demo implementations.
+
+Only stop and ask for clarification if a requirement is genuinely impossible to implement safely or architecturally without the missing information.
+
+============================================================
+61. FINAL DELIVERY
+============================================================
+
+At the end, provide:
+
+1. What was built
+2. Architecture overview
+3. Folder structure
+4. How to run locally
+5. Environment variables
+6. Database setup
+7. Demo credentials if applicable
+8. Demo workflow
+9. API overview
+10. WebSocket overview
+11. AI provider configuration
+12. Speech provider configuration
+13. POS integration instructions
+14. Store Agent instructions
+15. Known limitations
+16. Client questions
+17. Production deployment plan
+18. Security considerations
+19. Privacy considerations
+20. Recommended next steps
+
+============================================================
+62. GOLDEN RULE
+============================================================
+
+Do not optimize for "how much code can you generate."
+
+Optimize for:
+
+"How professionally would this product perform in front of a real US retail client?"
+
+Build the foundation correctly.
+
+Build the demo convincingly.
+
+Keep production integrations modular.
+
+Keep the architecture scalable.
+
+Keep the UI premium.
+
+Keep all uncertain assumptions explicit.
+
+Do not fake real integrations.
+
+Do not leave the core product as a static mockup.
+
+Start now.

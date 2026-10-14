@@ -1,0 +1,1 @@
+The full product specification is in `all to all Requriments` at the repository root and in the original client whiteboard photo. This build implements the V1/V2 Store Listen foundation plus a separate Devcore marketing/Kanban surface.

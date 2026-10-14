@@ -1,0 +1,53 @@
+{
+  "name": "store-listen-desktop-agent",
+  "version": "1.2.1",
+  "private": true,
+  "description": "Store Listen secure Windows capture agent",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "pack": "node scripts/build-release-config.js && electron-builder --dir",
+    "dist": "node scripts/build-release-config.js && electron-builder --win nsis --x64",
+    "dist:tailscale": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-tailscale-release.ps1"
+  },
+  "devDependencies": {
+    "electron": "^36.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.storelisten.desktop",
+    "productName": "Store Listen",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/release-config.json",
+        "to": "release-config.json"
+      }
+    ],
+    "win": {
+      "icon": "assets/store-listen.ico",
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "StoreListen-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "installerIcon": "assets/store-listen.ico",
+      "uninstallerIcon": "assets/store-listen.ico",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true
+    }
+  }
+}
