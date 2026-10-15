@@ -1,12 +1,18 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, session, Tray } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, session, Tray } = require('electron');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { migrateSavedApiBase } = require('./device-config');
 const transcriptTools = require('./transcript-utils');
 
 let mainWindow;
 let tray;
 let quitting = false;
+let sessionEnding = false;
+let pendingWindowAction = null;
+let pendingWindowActionTimer = null;
+nativeTheme.themeSource = 'light';
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const configPath = () => path.join(app.getPath('userData'), 'device.json');
 const transcriptPath = () => path.join(app.getPath('userData'), 'transcripts.enc');
 
@@ -39,6 +45,30 @@ function cpuTimes() {
 }
 
 let previousCpuTimes = cpuTimes();
+
+function completePendingWindowAction() {
+  clearTimeout(pendingWindowActionTimer);
+  pendingWindowActionTimer = null;
+  const action = pendingWindowAction;
+  pendingWindowAction = null;
+  if (action === 'quit') app.quit();
+  else if (action === 'hide' && !sessionEnding) mainWindow?.hide();
+}
+
+function requestCaptureStop(action) {
+  if (pendingWindowAction === 'quit') return;
+  if (action === 'quit') pendingWindowAction = 'quit';
+  else if (!pendingWindowAction) pendingWindowAction = action;
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
+    completePendingWindowAction();
+    return;
+  }
+  clearTimeout(pendingWindowActionTimer);
+  mainWindow.webContents.send('capture-stop-requested');
+  pendingWindowActionTimer = setTimeout(completePendingWindowAction, 15_000);
+}
+
+ipcMain.on('capture-stop-complete', completePendingWindowAction);
 
 function applicationConfig() {
   if (!app.isPackaged) {
@@ -80,7 +110,7 @@ function createWindow() {
     height: 900,
     minWidth: 760,
     minHeight: 680,
-    backgroundColor: '#f4f7f4',
+    backgroundColor: '#f4f6f3',
     title: 'Store Listen | Store Capture',
     icon: path.join(__dirname, '..', 'assets', 'store-listen.ico'),
     autoHideMenuBar: true,
@@ -93,10 +123,22 @@ function createWindow() {
   });
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
   mainWindow.on('close', (event) => {
-    if (!quitting) {
+    if (!quitting && !sessionEnding) {
       event.preventDefault();
-      mainWindow.hide();
+      requestCaptureStop('hide');
     }
+  });
+  mainWindow.on('show', () => mainWindow.webContents.send('window-opened'));
+  mainWindow.on('query-session-end', () => {
+    sessionEnding = true;
+    mainWindow.webContents.send('capture-stop-requested');
+  });
+  mainWindow.on('session-end', () => {
+    sessionEnding = true;
+    mainWindow.webContents.send('capture-stop-requested');
+  });
+  mainWindow.on('focus', () => {
+    if (sessionEnding && !pendingWindowAction) sessionEnding = false;
   });
 }
 
@@ -108,7 +150,7 @@ function createTray() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open Store Listen', click: () => mainWindow?.show() },
     { type: 'separator' },
-    { label: 'Exit', click: () => { quitting = true; app.quit(); } },
+    { label: 'Exit', click: () => app.quit() },
   ]));
   tray.on('double-click', () => mainWindow?.show());
 }
@@ -209,7 +251,12 @@ ipcMain.handle('save-transcripts', (_event, sessions) => {
 ipcMain.handle('load-config', () => {
   if (!fs.existsSync(configPath())) return null;
   if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows secure storage is unavailable on this device.');
-  const saved = JSON.parse(fs.readFileSync(configPath(), 'utf8'));
+  let saved = JSON.parse(fs.readFileSync(configPath(), 'utf8'));
+  const migrated = migrateSavedApiBase(saved, applicationConfig());
+  if (migrated !== saved) {
+    fs.writeFileSync(configPath(), JSON.stringify(migrated, null, 2), { mode: 0o600 });
+    saved = migrated;
+  }
   return {
     ...saved,
     deviceSecret: safeStorage.decryptString(Buffer.from(saved.encryptedSecret, 'base64')),
@@ -253,17 +300,34 @@ ipcMain.handle('device-metrics', () => {
   };
 });
 
-app.whenReady().then(() => {
-  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    callback(permission === 'media' && webContents.getURL().startsWith('file://'));
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
   });
-  createWindow();
-  createTray();
-  Menu.setApplicationMenu(null);
-  app.on('activate', () => mainWindow?.show());
-});
+  app.whenReady().then(() => {
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+      callback(permission === 'media' && webContents.getURL().startsWith('file://'));
+    });
+    createWindow();
+    createTray();
+    Menu.setApplicationMenu(null);
+    app.on('activate', () => mainWindow?.show());
+  });
+}
 
 app.on('before-quit', () => { quitting = true; });
+app.on('before-quit', (event) => {
+  if (quitting) return;
+  quitting = true;
+  if (sessionEnding || !mainWindow || mainWindow.isDestroyed()) return;
+  event.preventDefault();
+  requestCaptureStop('quit');
+});
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin' && quitting) app.quit();
 });

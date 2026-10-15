@@ -101,9 +101,10 @@ def test_whisper_rejects_languages_outside_english_and_spanish(monkeypatch, tmp_
         WhisperSpeechProvider().transcribe_file(tmp_path / "french.wav")
 
 
-def test_supported_languages_include_hindi_and_urdu():
+def test_supported_languages_include_hindi_urdu_and_arabic():
     assert normalize_supported_language("hi-IN") == "hi"
     assert normalize_supported_language("ur-PK") == "ur"
+    assert normalize_supported_language("ar-SA") == "ar"
     assert normalize_supported_language("fr-FR") is None
 
 

@@ -45,7 +45,6 @@ async def lifespan(_: FastAPI):
     finally:
         await hub.stop()
 
-
 app = FastAPI(title="Store Listen API", version="1.0.0", docs_url="/docs", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,

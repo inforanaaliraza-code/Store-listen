@@ -2,12 +2,14 @@ fastapi==0.116.1
 uvicorn[standard]==0.34.3
 pydantic==2.11.7
 pydantic-settings==2.10.1
+PyJWT==2.10.1
 SQLAlchemy==2.0.41
 pymongo[srv]==4.8.0
 mongomock==4.3.0
 redis==6.0.0
 httpx==0.28.1
 python-dotenv==1.1.1
+python-multipart==0.0.20
 pytest==8.4.2
 pytest-asyncio==1.0.0
 websockets==15.0.1

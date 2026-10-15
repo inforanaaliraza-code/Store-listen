@@ -37,10 +37,10 @@ class NoSpeechDetected(ValueError):
 class UnsupportedLanguageDetected(ValueError):
     def __init__(self, language: str):
         self.language = language
-        super().__init__(f"Only English, Spanish, Hindi, and Urdu speech is supported; detected {language}.")
+        super().__init__(f"Only English, Spanish, Hindi, Urdu, and Arabic speech is supported; detected {language}.")
 
 
-SUPPORTED_LANGUAGES = frozenset({"en", "es", "hi", "ur"})
+SUPPORTED_LANGUAGES = frozenset({"en", "es", "hi", "ur", "ar"})
 
 
 def normalize_supported_language(language: str | None) -> str | None:

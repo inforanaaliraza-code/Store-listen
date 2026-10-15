@@ -177,6 +177,7 @@ export default function LivePage() {
   const conversationIdRef = useRef('');
   const segmentIdsRef = useRef(new Set<string>());
   const liveConversationIdRef = useRef('');
+  const liveConversationStartedAtRef = useRef(0);
   const endedConversationIdRef = useRef('');
   const transcriptClearTimerRef = useRef<number | null>(null);
   const recordNextChunkRef = useRef<() => void>(() => undefined);
@@ -213,14 +214,18 @@ export default function LivePage() {
     const response = await apiGet<{ conversations: { items: { id: string; started_at: string; status: string }[] } }>(`/api/v1/conversations?${params}`);
     if (!response.conversations.items.length) {
       liveConversationIdRef.current = '';
+      liveConversationStartedAtRef.current = 0;
       setConversationStatus('WAITING');
       setLines([]);
       setPartial('');
       return;
     }
     const conversation = response.conversations.items[0];
-    if (liveConversationIdRef.current && liveConversationIdRef.current !== conversation.id) return;
+    const conversationStartedAt = Date.parse(conversation.started_at) || 0;
+    if (liveConversationIdRef.current && liveConversationIdRef.current !== conversation.id
+      && conversationStartedAt < liveConversationStartedAtRef.current) return;
     liveConversationIdRef.current = conversation.id;
+    liveConversationStartedAtRef.current = conversationStartedAt;
     if (conversation.status !== 'LIVE') {
       const ended = conversation.status === 'ENDED';
       endedConversationIdRef.current = ended ? conversation.id : '';
@@ -273,6 +278,7 @@ export default function LivePage() {
     transcriptClearTimerRef.current = null;
     endedConversationIdRef.current = '';
     liveConversationIdRef.current = '';
+    liveConversationStartedAtRef.current = 0;
     segmentIdsRef.current.clear();
     setLines([]);
     setPartial('');
@@ -325,18 +331,29 @@ export default function LivePage() {
       if (event.event !== 'conversation.started'
         && event.conversationId
         && event.conversationId === endedConversationIdRef.current) return;
-      if (event.conversationId
-        && ['conversation.started', 'transcript.partial', 'transcript.final'].includes(event.event)
-        && event.conversationId !== liveConversationIdRef.current) {
-        if (transcriptClearTimerRef.current !== null) window.clearTimeout(transcriptClearTimerRef.current);
-        transcriptClearTimerRef.current = null;
-        endedConversationIdRef.current = '';
-        liveConversationIdRef.current = event.conversationId;
-        segmentIdsRef.current.clear();
-        finalCaptureSequenceRef.current = 0;
-        setLines([]);
-        setPartial('');
-        setConversationStatus('LIVE');
+      if (event.event === 'conversation.started' && event.conversationId) {
+        const startedAt = Date.parse(event.timestamp || '') || Date.now();
+        if (liveConversationIdRef.current && event.conversationId !== liveConversationIdRef.current
+          && startedAt < liveConversationStartedAtRef.current) return;
+        if (event.conversationId !== liveConversationIdRef.current) {
+          if (transcriptClearTimerRef.current !== null) window.clearTimeout(transcriptClearTimerRef.current);
+          transcriptClearTimerRef.current = null;
+          endedConversationIdRef.current = '';
+          liveConversationIdRef.current = event.conversationId;
+          liveConversationStartedAtRef.current = startedAt;
+          segmentIdsRef.current.clear();
+          finalCaptureSequenceRef.current = 0;
+          setLines([]);
+          setPartial('');
+          setConversationStatus('LIVE');
+        }
+      } else if (event.conversationId
+        && ['transcript.partial', 'transcript.final'].includes(event.event)) {
+        if (!liveConversationIdRef.current) {
+          liveConversationIdRef.current = event.conversationId;
+        } else if (event.conversationId !== liveConversationIdRef.current) {
+          return;
+        }
       }
       if (event.event === 'device.health.updated') {
         const eventStoreId = event.storeId || storeId;

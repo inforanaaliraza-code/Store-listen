@@ -33,3 +33,4 @@ desktop-agent/release-session-end/
 *.blockmap
 out.json
 backend/.migration_schema_temp.db
+docs/

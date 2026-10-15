@@ -14,4 +14,7 @@ contextBridge.exposeInMainWorld('storeListen', {
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke('set-launch-at-login', enabled),
   getLaunchAtLogin: () => ipcRenderer.invoke('get-launch-at-login'),
   deviceMetrics: () => ipcRenderer.invoke('device-metrics'),
+  onCaptureStopRequested: (callback) => ipcRenderer.on('capture-stop-requested', callback),
+  captureStopComplete: () => ipcRenderer.send('capture-stop-complete'),
+  onWindowOpened: (callback) => ipcRenderer.on('window-opened', callback),
 });

@@ -9,7 +9,7 @@
     maxZcr: 0.42,
     startFrames: 2,
     endFrames: 5,
-    silenceHangoverMs: 90,
+    silenceHangoverMs: 1000,
     maxSegmentMs: 5000,
     minClipMs: 240,
     previewIntervalMs: 900,
@@ -75,6 +75,7 @@
     let speaking = false;
     let voiced = 0;
     let silent = 0;
+    let silenceStartedAt = null;
 
     return {
       get speaking() {
@@ -84,8 +85,9 @@
         speaking = false;
         voiced = 0;
         silent = 0;
+        silenceStartedAt = null;
       },
-      observe(samples, frequencyDb, sampleRate) {
+      observe(samples, frequencyDb, sampleRate, timestampMs = Date.now()) {
         const energy = calculateAudioEnergy(samples);
         const zcr = zeroCrossingRate(samples);
         const ratio = speechBandRatio(frequencyDb, sampleRate);
@@ -95,6 +97,7 @@
         if (voicedNow) {
           voiced += 1;
           silent = 0;
+          silenceStartedAt = null;
           if (!speaking && voiced >= config.startFrames) {
             speaking = true;
             return { state: 'start', ...energy, zcr, ratio };
@@ -103,9 +106,11 @@
         }
         voiced = 0;
         if (speaking) {
+          if (silenceStartedAt === null) silenceStartedAt = timestampMs;
           silent += 1;
-          if (silent >= config.endFrames) {
+          if (silent >= config.endFrames && timestampMs - silenceStartedAt >= config.silenceHangoverMs) {
             speaking = false;
+            silenceStartedAt = null;
             return { state: 'end', ...energy, zcr, ratio };
           }
           return { state: 'hangover', ...energy, zcr, ratio };

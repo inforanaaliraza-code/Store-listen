@@ -2,9 +2,12 @@ const $ = (selector) => document.querySelector(selector);
 const transcriptTools = window.StoreListenTranscript;
 const voiceDetection = window.StoreListenAudioDetection || {};
 const deviceHealth = window.StoreListenDeviceHealth;
+const { isDeviceSessionExpired } = window.StoreListenDeviceConfig;
+const { stopCaptureAndDrain } = window.StoreListenRecordingLifecycle;
+const { formatUserError } = window.StoreListenErrorMessages;
 const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 1600;
 const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 240;
-const PREVIEW_INTERVAL_MS = voiceDetection.config?.previewIntervalMs ?? 900;
+const RECORDER_TIMESLICE_MS = 1000;
 const setupScreen = $('#setupScreen');
 const appScreen = $('#appScreen');
 const state = {
@@ -13,6 +16,7 @@ const state = {
   loginToken: '',
   stores: [],
   capture: null,
+  captureStartPromise: null,
   expandedSessionIds: new Set(),
   transcriptCount: 0,
   sessions: [],
@@ -25,12 +29,14 @@ const state = {
   apiTimer: null,
   setupHealthTimer: null,
   clockTimer: null,
+  reactivationPromise: null,
 };
 
 function showError(element, message) {
   if (!element) return;
-  element.textContent = message;
-  element.hidden = !message;
+  const formatted = formatUserError(message);
+  element.textContent = formatted;
+  element.hidden = !formatted;
 }
 
 function setHidden(selector, hidden) {
@@ -68,14 +74,80 @@ async function checkSetupConnection() {
 }
 
 async function request(route, options = {}, config = state.config) {
-  return window.storeListen.request({
-    apiBase: options.apiBase || config?.apiBase || state.apiBase,
-    route,
-    method: options.method || 'GET',
-    body: options.body,
-    token: options.token || config?.deviceSecret || state.loginToken,
-    deviceId: options.deviceId || config?.deviceId,
-  });
+  try {
+    return await window.storeListen.request({
+      apiBase: options.apiBase || config?.apiBase || state.apiBase,
+      route,
+      method: options.method || 'GET',
+      body: options.body,
+      token: options.token || config?.deviceSecret || state.loginToken,
+      deviceId: options.deviceId || config?.deviceId,
+    });
+  } catch (error) {
+    await returnToDeviceActivation(error);
+    throw error;
+  }
+}
+
+async function returnToDeviceActivation(error) {
+  if (!state.config || !isDeviceSessionExpired(error)) return false;
+  if (state.reactivationPromise) {
+    await state.reactivationPromise;
+    return true;
+  }
+
+  const config = state.config;
+  state.config = null;
+  state.apiBase = config.apiBase;
+  state.loginToken = '';
+  state.reactivationPromise = (async () => {
+    window.clearInterval(state.apiTimer);
+    window.clearInterval(state.clockTimer);
+    window.clearInterval(state.healthTimer);
+    window.clearTimeout(state.reconnectTimer);
+    window.clearInterval(state.setupHealthTimer);
+    if (state.healthSocket) {
+      const socket = state.healthSocket;
+      state.healthSocket = null;
+      socket.close();
+    }
+
+    const capture = state.capture;
+    if (capture) {
+      capture.requested = false;
+      capture.speaking = false;
+      window.clearTimeout(capture.segmentTimer);
+      if (capture.voiceFrame) window.cancelAnimationFrame(capture.voiceFrame);
+      if (capture.recorder && capture.recorder.state !== 'inactive') {
+        capture.recorder.ondataavailable = null;
+        capture.recorder.onstop = null;
+        capture.recorder.onerror = null;
+        capture.recorder.stop();
+      }
+      capture.stream?.getTracks().forEach((track) => track.stop());
+      if (capture.audioContext?.state !== 'closed') await capture.audioContext?.close();
+      capture.session.status = 'ENDED';
+      capture.session.endedAt = new Date();
+      state.capture = null;
+      await saveTranscriptArchive(true);
+    }
+
+    await window.storeListen.clearConfig();
+    $('#loginForm').hidden = false;
+    $('#deviceForm').hidden = true;
+    $('#password').value = '';
+    $('#setupTitle').textContent = 'Connect workspace';
+    $('#stepCount').textContent = '01 / 02';
+    showSetup();
+    showError($('#setupError'), 'This device registration is no longer valid. Sign in and activate this PC again. Saved transcripts are kept on this PC.');
+  })();
+
+  try {
+    await state.reactivationPromise;
+  } finally {
+    state.reactivationPromise = null;
+  }
+  return true;
 }
 
 function showSetup() {
@@ -145,6 +217,7 @@ function showWorkspace(config) {
   connectHealth();
   state.apiTimer = window.setInterval(checkApi, 20_000);
   state.clockTimer = window.setInterval(updateSessionClock, 1000);
+  void startCapture();
 }
 
 function setDeviceStatus(online) {
@@ -236,6 +309,10 @@ function connectHealth() {
       state.healthTimer = window.setInterval(sendHealth, 10_000);
     };
     socket.onclose = (event) => {
+      if (event.code === 4401) {
+        void returnToDeviceActivation(new Error('Invalid or expired session'));
+        return;
+      }
       if (event.code === 1008) state.healthSpeakingSupported = false;
       if (state.healthSocket === socket) state.healthSocket = null;
       window.clearInterval(state.healthTimer);
@@ -257,8 +334,8 @@ function setCaptureUi(recording, busy = false, ended = false) {
   $('#captureTitle').textContent = recording ? 'Live conversation' : busy ? 'Finishing this session.' : ended ? 'Session ended.' : 'Ready when you are.';
   $('#captureMessage').textContent = recording
     ? 'Speech is detected in milliseconds; each short phrase is sent as soon as you pause.'
-    : busy ? 'Uploading the final clip and closing the conversation.' : ended ? 'The final transcript and recording are saved to conversation history.' : 'Choose the store microphone and start a secure capture session.';
-  $('#captureButtonLabel').textContent = recording ? 'Stop Recording' : busy ? 'Stopping…' : 'Start recording';
+    : busy ? 'Microphone is off. Completing queued transcripts and closing the conversation.' : ended ? 'The final transcript and recording are saved to conversation history.' : 'Choose the store microphone and start a secure capture session.';
+  $('#captureButtonLabel').textContent = recording ? 'Stop Recording' : busy ? 'Saving transcript…' : 'Start recording';
   $('#captureButton').classList.toggle('stopping', recording);
   $('#captureButton').disabled = busy;
   $('#microphoneSelect').disabled = recording || busy;
@@ -536,7 +613,11 @@ async function uploadSegment(capture, blob, sequence, offset, duration) {
   else {
     capture.latestPreviewText = '';
     renderLiveTranscript(capture.session);
+    if (response.analysis_status === 'unsupported_language') {
+      showError($('#captureError'), 'Speech was detected, but this setup supports English, Spanish, Hindi, and Urdu.');
+    }
   }
+  if (response.segment) showError($('#captureError'), '');
   $('#deliveryStat').innerHTML = '<i class="stat-dot"></i>Live';
   setApiStatus(true);
 }
@@ -555,36 +636,9 @@ function beginRecorder(capture) {
   const startedAt = Date.now();
   capture.recorder = recorder;
   capture.segmentStartedAt = startedAt;
-  let lastPreviewAt = 0;
   recorder.ondataavailable = (event) => {
     if (!event.data.size) return;
     chunks.push(event.data);
-    const now = Date.now();
-    if (now - startedAt < PREVIEW_INTERVAL_MS || now - lastPreviewAt < PREVIEW_INTERVAL_MS || capture.previewInFlight) return;
-    lastPreviewAt = now;
-    capture.previewInFlight = true;
-    const previewSequence = ++capture.previewSequence;
-    const captureSequence = capture.sequence + 1;
-    const previewBlob = new Blob(chunks, { type: mimeType });
-    void previewBlob.arrayBuffer().then((buffer) => window.storeListen.previewAudio({
-      apiBase: state.config.apiBase,
-      deviceId: state.config.deviceId,
-      deviceSecret: state.config.deviceSecret,
-      contentType: mimeType.split(';')[0] || 'audio/webm',
-      filename: `store-preview-${captureSequence}.webm`,
-      audioBytes: new Uint8Array(buffer),
-      fields: {
-        store_id: state.config.storeId,
-        conversation_id: capture.conversationId,
-        capture_sequence: captureSequence,
-        preview_sequence: previewSequence,
-      },
-    })).then((result) => {
-      if (result.segment?.originalText && state.capture === capture && capture.sequence + 1 === captureSequence) {
-        capture.latestPreviewText = result.segment.originalText;
-        renderLiveTranscript(capture.session, capture.latestPreviewText, true);
-      }
-    }).catch(() => undefined).finally(() => { capture.previewInFlight = false; });
   };
   recorder.onerror = () => {
     showError($('#captureError'), 'Microphone recording failed. Check the selected input and Windows microphone permissions.');
@@ -600,7 +654,8 @@ function beginRecorder(capture) {
     capture.offset = offset + duration;
     if (blob.size && durationMs >= MIN_CLIP_MS) {
       const sequence = ++capture.sequence;
-      capture.uploadQueue = capture.uploadQueue.then(() => uploadSegment(capture, blob, sequence, offset, duration)).catch((error) => {
+      capture.uploadQueue = capture.uploadQueue.then(() => uploadSegment(capture, blob, sequence, offset, duration)).catch(async (error) => {
+        if (await returnToDeviceActivation(error)) return;
         showError($('#captureError'), `${error.message} Capture is pausing so audio is not silently lost.`);
         capture.requested = false;
         setApiStatus(false);
@@ -609,7 +664,7 @@ function beginRecorder(capture) {
     }
     if (capture.requested && capture.speaking) beginRecorder(capture);
   };
-  recorder.start(PREVIEW_INTERVAL_MS);
+  recorder.start(RECORDER_TIMESLICE_MS);
   capture.segmentTimer = window.setTimeout(() => {
     if (recorder.state === 'recording') recorder.stop();
   }, MAX_SEGMENT_MS);
@@ -624,7 +679,7 @@ function monitorVoice(capture) {
     capture.analyser.getFloatTimeDomainData(samples);
     capture.analyser.getFloatFrequencyData(spectrum);
     const result = gate
-      ? gate.observe(samples, spectrum, capture.audioContext.sampleRate)
+      ? gate.observe(samples, spectrum, capture.audioContext.sampleRate, performance.now())
       : { state: (voiceDetection.shouldVoiceTrigger?.(samples) ? 'start' : 'idle') };
     if (result.state === 'start') {
       capture.speaking = true;
@@ -650,6 +705,7 @@ function monitorVoice(capture) {
 }
 
 async function stopCapture() {
+  if (state.captureStartPromise) await state.captureStartPromise;
   const capture = state.capture;
   if (!capture) return;
   if (capture.stopPromise) return capture.stopPromise;
@@ -659,16 +715,7 @@ async function stopCapture() {
   clearTimeout(capture.segmentTimer);
   if (capture.voiceFrame) window.cancelAnimationFrame(capture.voiceFrame);
   capture.stopPromise = (async () => {
-    const recorder = capture.recorder;
-    if (recorder && recorder.state !== 'inactive') {
-      await new Promise((resolve) => {
-        recorder.addEventListener('stop', resolve, { once: true });
-        recorder.stop();
-      });
-    }
-    await capture.uploadQueue;
-    capture.stream?.getTracks().forEach((track) => track.stop());
-    if (capture.audioContext?.state !== 'closed') await capture.audioContext?.close();
+    await stopCaptureAndDrain(capture, () => setMicrophoneStatus('Not active', 'neutral'));
     let serverEnded = true;
     try {
       await request(`/api/v1/audio/sessions/${encodeURIComponent(capture.conversationId)}/finish`, { method: 'POST' });
@@ -693,6 +740,18 @@ async function stopCapture() {
 }
 
 async function startCapture() {
+  if (state.capture) return;
+  if (state.captureStartPromise) return state.captureStartPromise;
+  const starting = startCaptureSession();
+  state.captureStartPromise = starting;
+  try {
+    await starting;
+  } finally {
+    if (state.captureStartPromise === starting) state.captureStartPromise = null;
+  }
+}
+
+async function startCaptureSession() {
   showError($('#captureError'), '');
   $('#captureButton').disabled = true;
   let stream;
@@ -756,8 +815,6 @@ async function startCapture() {
       latestPreviewText: '',
       uploadQueue: Promise.resolve(),
       sequence: 0,
-      previewSequence: 0,
-      previewInFlight: false,
       offset: 0,
       startedAt: Date.now(),
       segmentStartedAt: 0,
@@ -871,6 +928,18 @@ $('#captureButton').addEventListener('click', () => {
   if (state.capture?.requested) void stopCapture();
   else if (state.capture) void stopCapture();
   else void startCapture();
+});
+
+window.storeListen.onCaptureStopRequested(async () => {
+  try {
+    await stopCapture();
+  } finally {
+    window.storeListen.captureStopComplete();
+  }
+});
+
+window.storeListen.onWindowOpened(() => {
+  if (state.config) void startCapture();
 });
 
 $('#settingsButton').addEventListener('click', async () => {

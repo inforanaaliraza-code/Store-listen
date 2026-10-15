@@ -84,7 +84,7 @@
                 <div class="hero-topline"><span class="live-indicator" id="captureIndicator"><i></i><span>CAPTURE PAUSED</span></span><span class="capture-session" id="sessionTime">00:00:00</span></div>
                 <div class="hero-message"><h2 id="captureTitle">Ready when you are.</h2><p id="captureMessage">Choose the store microphone and start a secure capture session.</p></div>
                 <div class="signal-wrap" aria-hidden="true"><div class="signal-line"></div><div class="signal-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
-                <div class="capture-error" id="captureError" role="alert" hidden></div>
+                <footer class="capture-controls"><div class="capture-mic-status"><span><strong id="micStatus"><i class="status-dot neutral"></i>Not active</strong><small id="apiStatus"><i class="status-dot"></i>Checking connection</small></span></div><button class="capture-button" id="captureButton"><span class="capture-button-icon"><svg id="captureButtonIcon" viewBox="0 0 24 24"><path d="M12 3v12M8 7v7a4 4 0 0 0 8 0V7M5 12a7 7 0 0 0 14 0M12 19v3M9 22h6"/></svg></span><span id="captureButtonLabel">Start recording</span></button></footer>
               </article>
               <div class="stats-strip"><div class="stat-cell"><span>TRANSCRIPTS</span><strong id="transcriptCount">0</strong></div><div class="stat-cell"><span>SESSION TIME</span><strong id="sessionStat">00:00</strong></div><div class="stat-cell"><span>DELIVERY</span><strong id="deliveryStat"><i class="stat-dot"></i>Ready</strong></div></div>
 
@@ -92,7 +92,6 @@
                 <header class="section-header"><div><p class="eyebrow">LIVE CONVERSATION</p><h2>Current transcript</h2></div><span class="feed-count" id="feedCount">LIVE · 0</span></header>
                 <div class="transcript-list" id="transcriptList" role="log" aria-live="polite" aria-relevant="additions text"><div class="empty-transcript" id="emptyTranscript"><span class="empty-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><strong>Your transcript appears here</strong><span>Start capture to transcribe conversation audio.</span></div></div>
               </article>
-              <footer class="capture-controls"><div class="capture-mic-status"><span class="mic-status-icon"><svg viewBox="0 0 24 24"><path d="M12 3v12M8 7v7a4 4 0 0 0 8 0V7M5 12a7 7 0 0 0 14 0M12 19v3M9 22h6"/></svg></span><span><strong id="micStatus"><i class="status-dot neutral"></i>Not active</strong><small id="apiStatus"><i class="status-dot"></i>Checking connection</small></span></div><button class="capture-button" id="captureButton"><span class="capture-button-icon"><svg id="captureButtonIcon" viewBox="0 0 24 24"><path d="M12 3v12M8 7v7a4 4 0 0 0 8 0V7M5 12a7 7 0 0 0 14 0M12 19v3M9 22h6"/></svg></span><span id="captureButtonLabel">Start recording</span></button></footer>
             </section>
 
             <aside class="insight-column">
@@ -126,11 +125,14 @@
         </section>
       </main>
       <dialog id="settingsDialog" class="settings-dialog">
-        <form method="dialog"><div class="dialog-heading"><div><p class="eyebrow">DEVICE PREFERENCES</p><h2>Settings</h2></div><button class="icon-button dialog-close" aria-label="Close settings">×</button></div><label class="setting-toggle"><span><strong>Launch at Windows sign-in</strong><small>Keep this device ready after a restart.</small></span><input id="launchAtLoginToggle" type="checkbox"></label><p class="dialog-note">Capture always starts only after an operator explicitly presses Start capture.</p><button class="primary-button dialog-done">Done</button></form>
+        <form method="dialog"><div class="dialog-heading"><div><p class="eyebrow">DEVICE PREFERENCES</p><h2>Settings</h2></div><button class="icon-button dialog-close" aria-label="Close settings">×</button></div><label class="setting-toggle"><span><strong>Launch at Windows sign-in</strong><small>Keep this device ready after a restart.</small></span><input id="launchAtLoginToggle" type="checkbox"></label><p class="dialog-note">Capture starts automatically when this app opens. Use the recording button to stop or resume capture.</p><button class="primary-button dialog-done">Done</button></form>
       </dialog>
     </div>
     <script src="audio-detection.js"></script>
     <script src="device-health.js"></script>
+    <script src="device-config.js"></script>
+    <script src="recording-lifecycle.js"></script>
+    <script src="error-messages.js"></script>
     <script src="transcript-utils.js"></script>
     <script src="app.js"></script>
   </body>

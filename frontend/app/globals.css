@@ -3,8 +3,8 @@
 @tailwind utilities;
 
 :root {
-  --font-sans: "Segoe UI";
-  --font-serif: Georgia;
+  --font-sans: "Segoe UI Variable", "Aptos", "Segoe UI";
+  --font-serif: var(--font-sans);
   --bg: #090c0b;
   --bg-2: #101715;
   --panel: #141d1b;
@@ -32,7 +32,7 @@ body {
   font-family: var(--font-sans), "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   font-size: 14px;
   line-height: 1.55;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -44,7 +44,7 @@ button { cursor: pointer; }
 
 .serif {
   font-family: var(--font-serif), Georgia, "Times New Roman", serif;
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
   font-weight: 700;
 }
 .scene { perspective: 1600px; }

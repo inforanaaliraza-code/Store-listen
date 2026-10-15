@@ -1,0 +1,26 @@
+[Unit]
+Description=Business AI Backup educational demo API
+After=network-online.target mongod.service
+Wants=network-online.target
+Requires=mongod.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/bussinessi-ai-backup/backend
+EnvironmentFile=/opt/bussinessi-ai-backup/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=HF_HOME=/opt/bussinessi-ai-backup/backend/storage/models
+Environment=XDG_CACHE_HOME=/opt/bussinessi-ai-backup/backend/storage/cache
+ExecStart=/opt/bussinessi-ai-backup/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8180 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/bussinessi-ai-backup/backend/storage
+
+[Install]
+WantedBy=multi-user.target
