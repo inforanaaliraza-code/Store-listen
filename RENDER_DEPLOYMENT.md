@@ -12,7 +12,7 @@ The root `render.yaml` is the single Blueprint for both services. It does not cr
 1. Push `render.yaml`, `backend/.python-version`, and `frontend/package-lock.json` to the GitHub `main` branch.
 2. Create a MongoDB Atlas M0 free cluster, database user, and database. Atlas is external to Render; it is not created by this Blueprint.
 3. Copy the Atlas connection URI somewhere private. Do not commit it or send it in chat. Render will request it as `MONGODB_URI` when syncing the Blueprint.
-4. Render Free services do not have fixed outbound IPs. For an Atlas M0 connection, configure Atlas Network Access to allow Render's dynamic egress (commonly `0.0.0.0/0`), and protect the cluster with a unique, strong database-user password and TLS. This is less restrictive than an IP allowlist.
+4. In Render, open the `store-listen-api` service's **Connect → Outbound** tab and copy its regional outbound CIDR ranges. Add those ranges to Atlas **Security → Network Access → IP Access List**. Render shares outbound ranges by region; use the service's displayed list rather than allowing `0.0.0.0/0`. Protect the cluster with a unique, strong database-user password and TLS.
 
 ## Create Both Services
 
