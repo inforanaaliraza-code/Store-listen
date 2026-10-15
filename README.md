@@ -48,11 +48,11 @@ There is no local database server or container stack. MongoDB Atlas stores appli
 ```
 AI_PROVIDER=mock          # demo only; production requires a configured provider/key
 SPEECH_PROVIDER=whisper   # local faster-whisper; mock is demo only
-POS_PROVIDER=mock         # vendor unknown
-```
+### Render deployment
 
-Production is intentionally fail-closed. It requires an Atlas TLS connection, HTTPS API/CORS origins, strong distinct secrets, TLS Redis, non-demo providers, a confirmed POS adapter, and shared audio object storage. The current repository has no real POS or cloud object-storage adapter, so a production API or client installer cannot yet be honestly released.
+The root [`render.yaml`](render.yaml) defines two separate Render services from this repository: a free Static Site for the Vite frontend and a free Python Web Service for the FastAPI backend. Follow [RENDER_DEPLOYMENT.md](RENDER_DEPLOYMENT.md) to connect the GitHub repository, provide the private MongoDB Atlas URI, and configure the frontend/API URLs and CORS.
 
+The free Render setup is a public demo; the app includes seeded demo credentials. Its backend sleeps after inactivity and has ephemeral audio storage. Production remains blocked until a real POS adapter, shared object storage, TLS Redis, and production secrets are configured. Never use demo accounts or free storage for real customer, employee, or store recordings.
 ### Private Tailscale deployment
 
 The backend can stay on the designated Windows computer; it is not deployed to a VPS. Follow [the Tailscale self-host setup](docs/tailscale-self-host.md) to configure interactive device authorization, restrictive ACL tags, loopback-only backend/dashboard services, owner dashboard refresh, and logon startup tasks. Client PCs must have the official Tailscale client installed and approved by a tailnet admin before the Store Listen installer is used.
@@ -64,7 +64,7 @@ This repository currently runs in development/demo mode in the local environment
 The existing Electron application bundles its runtime; clients do not install Python, Node.js, a database, or a backend. For an optional cloud deployment, the release operator can still configure an HTTPS API origin (this is public endpoint configuration, not a secret):
 
 ```powershell
-$env:STORE_LISTEN_API_BASE_URL = 'https://api.yourdomain.com'
+The installer stores the API origin, not a secret. Device secrets are issued during activation and stored using Windows secure storage. Set the HTTPS API origin to the deployed backend URL when building a customer installer.
 npm --prefix desktop-agent run dist
 Remove-Item Env:STORE_LISTEN_API_BASE_URL
 ```

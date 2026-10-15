@@ -9,7 +9,7 @@ The root `render.yaml` is the single Blueprint for both services. It does not cr
 
 ## Before You Deploy
 
-1. Push `render.yaml`, `backend/.python-version`, and `frontend/package-lock.json` to the GitHub `main` branch. The Vercel-only scaffold is not used.
+1. Push `render.yaml`, `backend/.python-version`, and `frontend/package-lock.json` to the GitHub `main` branch.
 2. Create a MongoDB Atlas M0 free cluster, database user, and database. Atlas is external to Render; it is not created by this Blueprint.
 3. Copy the Atlas connection URI somewhere private. Do not commit it or send it in chat. Render will request it as `MONGODB_URI` when syncing the Blueprint.
 4. Render Free services do not have fixed outbound IPs. For an Atlas M0 connection, configure Atlas Network Access to allow Render's dynamic egress (commonly `0.0.0.0/0`), and protect the cluster with a unique, strong database-user password and TLS. This is less restrictive than an IP allowlist.
@@ -63,4 +63,4 @@ Required environment values are declared in `render.yaml`. The only value you mu
 - This configuration uses no Render Postgres or Key Value instance. Atlas M0 is a separate free database tier with its own quotas and availability limits.
 - The app is deliberately in demo mode with mock AI/POS providers. Demo credentials and demo data must not be used for real store data. Production startup currently fails closed because the repository does not yet implement real POS and shared object-storage adapters.
 
-Free Render is suitable for a protected demo, not dependable customer recording. For durable recordings and always-on transcription, move to paid compute plus shared object storage, or use a container host with adequate memory and storage.
+Render Free services are public, and this app includes seeded demo credentials; this is an unprotected demo, not a secure customer deployment. For durable recordings and always-on transcription, use paid compute plus shared object storage, or a container host with adequate memory and storage.
