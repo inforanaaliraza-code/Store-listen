@@ -8,6 +8,7 @@ const { formatUserError } = window.StoreListenErrorMessages;
 const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 1600;
 const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 240;
 const RECORDER_TIMESLICE_MS = 1000;
+const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 900, 1200);
 const setupScreen = $('#setupScreen');
 const appScreen = $('#appScreen');
 const state = {
@@ -634,11 +635,47 @@ function beginRecorder(capture) {
   const recorder = new MediaRecorder(capture.stream, { mimeType, audioBitsPerSecond: 64_000 });
   const chunks = [];
   const startedAt = Date.now();
+  let previewInFlight = false;
+  let lastPreviewAt = 0;
+  let previewSequence = 0;
   capture.recorder = recorder;
   capture.segmentStartedAt = startedAt;
   recorder.ondataavailable = (event) => {
     if (!event.data.size) return;
     chunks.push(event.data);
+    const now = Date.now();
+    if (recorder.state !== 'recording' || !capture.requested || previewInFlight
+      || now - startedAt < PREVIEW_INTERVAL_MS || now - lastPreviewAt < PREVIEW_INTERVAL_MS) return;
+    previewInFlight = true;
+    lastPreviewAt = now;
+    const previewBlob = new Blob(chunks, { type: mimeType });
+    void (async () => {
+      try {
+        const response = await window.storeListen.previewAudio({
+          apiBase: state.config.apiBase,
+          deviceId: state.config.deviceId,
+          deviceSecret: state.config.deviceSecret,
+          contentType: mimeType.split(';')[0] || 'audio/webm',
+          filename: `store-preview-${capture.sequence + 1}.webm`,
+          audioBytes: new Uint8Array(await previewBlob.arrayBuffer()),
+          fields: {
+            store_id: state.config.storeId,
+            conversation_id: capture.conversationId,
+            capture_sequence: capture.sequence + 1,
+            preview_sequence: ++previewSequence,
+          },
+        });
+        const partialText = response.segment?.originalText;
+        if (partialText && capture.requested && capture.recorder === recorder) {
+          capture.latestPreviewText = partialText;
+          renderLiveTranscript(capture.session, partialText, true);
+        }
+      } catch {
+        // Final transcription remains authoritative if a provisional preview fails.
+      } finally {
+        previewInFlight = false;
+      }
+    })();
   };
   recorder.onerror = () => {
     showError($('#captureError'), 'Microphone recording failed. Check the selected input and Windows microphone permissions.');

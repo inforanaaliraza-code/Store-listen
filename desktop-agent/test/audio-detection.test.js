@@ -27,9 +27,9 @@ function spectrum(speechDb, noiseDb) {
 test('voice gate starts within a few frames and ends after a brief hangover', () => {
   assert.ok(config.startFrames <= 3, 'speech start should require only a couple of frames');
   assert.ok(config.endFrames <= 6, 'a few silent frames should be enough once the timed hangover expires');
-  assert.equal(config.silenceHangoverMs, 1000);
+  assert.equal(config.silenceHangoverMs, 450);
   assert.ok(config.previewIntervalMs <= 1000, 'live previews should be sent about once per second');
-  assert.ok(config.maxSegmentMs <= 5000, 'final speech clips should stay short');
+  assert.ok(config.maxSegmentMs <= 2500, 'final speech clips should be finalized quickly');
 
   const gate = createVoiceGate();
   const speech = tone(512, 0.08);

@@ -7,7 +7,7 @@ export const voiceActivityConfig = {
   maxZcr: 0.42,
   startFrames: 2,
   endFrames: 5,
-  maxSegmentMs: 5000,
+  maxSegmentMs: 2400,
   minClipMs: 240,
   previewIntervalMs: 900,
 } as const;
