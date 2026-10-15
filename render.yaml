@@ -1,0 +1,69 @@
+services:
+  - type: web
+    name: store-listen-api
+    runtime: python
+    plan: free
+    region: ohio
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.4
+      - key: APP_ENV
+        value: development
+      - key: DEBUG
+        value: "false"
+      - key: DEMO_MODE
+        value: "true"
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGO_DATABASE_NAME
+        value: storelisten_render_demo
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: API_BASE_URL
+        value: https://store-listen-api.onrender.com
+      - key: WEB_BASE_URL
+        value: https://store-listen-web.onrender.com
+      - key: CORS_ORIGINS
+        value: https://store-listen-web.onrender.com
+      - key: CORS_ORIGIN_REGEX
+        value: ^$
+      - key: AI_PROVIDER
+        value: mock
+      - key: SPEECH_PROVIDER
+        value: whisper
+      - key: WHISPER_MODEL
+        value: tiny
+      - key: WHISPER_DEVICE
+        value: cpu
+      - key: WHISPER_COMPUTE_TYPE
+        value: int8
+      - key: POS_PROVIDER
+        value: mock
+      - key: STORAGE_PROVIDER
+        value: local
+      - key: AUDIO_STORAGE_DIR
+        value: /tmp/storelisten-audio
+      - key: REDIS_EVENT_BUS_ENABLED
+        value: "false"
+
+  - type: web
+    runtime: static
+    name: store-listen-web
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        value: https://store-listen-api.onrender.com
+      - key: VITE_WS_URL
+        value: wss://store-listen-api.onrender.com
