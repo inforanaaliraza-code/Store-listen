@@ -25,13 +25,14 @@ function spectrum(speechDb, noiseDb) {
   return values;
 }
 
-test('voice gate requires sustained speech and a longer hangover for accurate clips', () => {
-  assert.ok(config.startFrames >= 4, 'ignore brief noise spikes');
-  assert.ok(config.endFrames >= 8, 'keep the phrase open through short pauses');
-  assert.ok(config.silenceHangoverMs >= 550, 'collect a full spoken phrase before cutting');
-  assert.equal(config.livePreviewEnabled, false, 'live Whisper previews must stay off so finals own the CPU');
-  assert.ok(config.maxSegmentMs >= 4200, 'clips need enough speech for accurate STT');
-  assert.ok(config.minClipMs >= 850, 'reject tiny silence clips that hallucinate filler words');
+test('voice gate opens quickly and streams short live clips', () => {
+  assert.ok(config.startFrames <= 3, 'open the gate quickly when speech starts');
+  assert.ok(config.endFrames <= 6, 'cut soon after a short pause for live feel');
+  assert.ok(config.silenceHangoverMs <= 360, 'do not wait for a full sentence before uploading');
+  assert.equal(config.livePreviewEnabled, true, 'live Whisper previews stream provisional words while speaking');
+  assert.ok(config.maxSegmentMs <= 1800, 'short clips keep transcript updates near real time');
+  assert.ok(config.minClipMs <= 450, 'allow short spoken bursts onto the live path');
+  assert.ok(config.previewIntervalMs <= 1200, 'preview cadence stays under ~1.2s');
 
   const gate = createVoiceGate();
   const speech = tone(512, 0.1);
@@ -46,15 +47,15 @@ test('voice gate requires sustained speech and a longer hangover for accurate cl
   assert.equal(started, true);
 
   let ended = false;
-  for (let frame = 0; frame < 20; frame += 1) {
+  for (let frame = 0; frame < 8; frame += 1) {
     const result = gate.observe(hush, hushSpectrum, 48000, frame * (1000 / 60));
     if (result.state === 'end') ended = true;
   }
-  assert.equal(ended, false, 'short pauses should not end a spoken phrase');
-  for (let frame = 20; frame < 90; frame += 1) {
+  assert.equal(ended, false, 'very short pauses should not end a spoken phrase');
+  for (let frame = 8; frame < 40; frame += 1) {
     if (gate.observe(hush, hushSpectrum, 48000, frame * (1000 / 60)).state === 'end') ended = true;
   }
-  assert.equal(ended, true);
+  assert.equal(ended, true, 'a brief silence hangover should finalize the live clip');
 });
 
 test('quiet but real store-counter speech still opens the voice gate', () => {

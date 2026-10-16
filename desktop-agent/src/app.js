@@ -5,11 +5,11 @@ const deviceHealth = window.StoreListenDeviceHealth;
 const { isDeviceSessionExpired } = window.StoreListenDeviceConfig;
 const { stopCaptureAndDrain } = window.StoreListenRecordingLifecycle;
 const { formatUserError } = window.StoreListenErrorMessages;
-const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 1400;
-const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 200;
-const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 4500, 1000);
-const LIVE_PREVIEW_ENABLED = voiceDetection.config?.livePreviewEnabled === true;
-const RECORDER_TIMESLICE_MS = 400;
+const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 1600;
+const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 380;
+const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 1100, 700);
+const LIVE_PREVIEW_ENABLED = voiceDetection.config?.livePreviewEnabled !== false;
+const RECORDER_TIMESLICE_MS = 280;
 const MAX_PARALLEL_UPLOADS = 4;
 const setupScreen = $('#setupScreen');
 const appScreen = $('#appScreen');
@@ -450,24 +450,84 @@ function createParagraphBlock(paragraph, index) {
   }).format(new Date(paragraph.startedAt));
   meta.append(label, time);
 
-  // Spec: always show English in the live conversation box (Spanish audio → English text).
+  // Spoken language on top; English translation under Spanish (never Spanish under Spanish).
   const parts = transcriptTools.paragraphParts(paragraph.entries);
-  const englishBody = document.createElement('p');
-  englishBody.className = 'transcript-paragraph-body';
+  const spokenPlain = parts.map((part) => part.original).join(' ').trim();
   const englishText = parts.map((part) => (
-    part.kind === 'es' ? (part.translation || part.original) : part.original
-  )).join(' ').trim();
-  englishBody.textContent = englishText || 'No speech detected.';
-  item.append(meta, englishBody);
+    part.kind === 'es' ? (part.translation || '') : part.original
+  )).filter(Boolean).join(' ').trim();
+  const body = document.createElement('p');
+  body.className = 'transcript-paragraph-body';
+  body.textContent = spokenPlain || 'No speech detected.';
+  item.append(meta, body);
 
-  const spokenPlain = transcriptTools.formatParagraphSpoken(paragraph.entries);
-  if (spokenPlain && spokenPlain !== englishText && parts.some((part) => part.kind === 'es')) {
-    const original = document.createElement('p');
-    original.className = 'transcript-paragraph-original';
-    original.textContent = `ES: ${spokenPlain}`;
-    item.append(original);
+  if (parts.some((part) => part.kind === 'es')) {
+    const en = document.createElement('p');
+    en.className = 'transcript-paragraph-en';
+    const tag = document.createElement('span');
+    tag.className = 'transcript-en-tag';
+    tag.textContent = 'EN';
+    en.append(tag, document.createTextNode(` ${englishText || 'Translating…'}`));
+    item.append(en);
   }
   return item;
+}
+
+function ensureLivePartialRow() {
+  let row = $('#livePartialRow');
+  if (row) return row;
+  const list = $('#transcriptList');
+  const empty = $('#emptyTranscript');
+  if (empty) empty.remove();
+  if (!$('#liveTranscriptLines')) {
+    const linesHost = document.createElement('div');
+    linesHost.className = 'live-transcript-lines';
+    linesHost.id = 'liveTranscriptLines';
+    list.append(linesHost);
+  }
+  row = document.createElement('article');
+  row.className = 'transcript-paragraph transcript-partial';
+  row.id = 'livePartialRow';
+  row.innerHTML = '<header class="transcript-paragraph-meta"><span class="transcript-paragraph-label">LIVE</span><time class="transcript-time">…</time></header><p class="transcript-paragraph-body" id="livePartialBody"></p><p class="transcript-paragraph-en" id="livePartialEn" hidden><span class="transcript-en-tag">EN</span> <span id="livePartialEnText"></span></p>';
+  list.append(row);
+  return row;
+}
+
+function clearLivePartial() {
+  $('#livePartialRow')?.remove();
+  if (state.capture) state.capture.latestPreviewText = '';
+}
+
+function showLivePartial(segment) {
+  const original = String(segment?.originalText || '').trim();
+  if (!original || isClientJunkTranscript(original)) return;
+  const translated = String(segment?.translatedText || '').trim();
+  const language = String(segment?.language || 'en').toLowerCase();
+  const spanish = language === 'es' || transcriptTools.looksLikeSpanishText?.(original)
+    || /[¿¡ñáéíóúü]|señor|tenemos|producto|gracias|hola|dólares|dolares/i.test(original);
+  const english = spanish
+    && translated
+    && translated !== original
+    && !(transcriptTools.looksLikeSpanishText?.(translated) || /señor|tenemos|producto|gracias|hola|dólares|dolares/i.test(translated))
+    ? translated
+    : '';
+  ensureLivePartialRow();
+  const body = $('#livePartialBody');
+  const enRow = $('#livePartialEn');
+  const enText = $('#livePartialEnText');
+  if (body) body.textContent = original;
+  if (enRow && enText) {
+    if (spanish) {
+      enRow.hidden = false;
+      enText.textContent = english || 'Translating…';
+    } else {
+      enRow.hidden = true;
+      enText.textContent = '';
+    }
+  }
+  if (state.capture) state.capture.latestPreviewText = original;
+  const list = $('#transcriptList');
+  if (list) list.scrollTop = list.scrollHeight;
 }
 
 function captureDuration(session) {
@@ -687,7 +747,7 @@ function addTranscript(segment) {
     capturedAt,
   };
   session.entries.push(entry);
-  if (state.capture) state.capture.latestPreviewText = '';
+  clearLivePartial();
   saveTranscriptArchive();
   renderLiveTranscript(session);
   state.transcriptCount += 1;
@@ -830,7 +890,9 @@ function beginRecorder(capture) {
             preview_sequence: previewSequence,
           },
         });
-        // Live previews stay off the transcript pane — finals keep the conversation clean.
+        if (response?.segment?.originalText && capture.requested) {
+          showLivePartial(response.segment);
+        }
       } catch {
         // Final transcription remains authoritative if a provisional preview fails.
       } finally {
@@ -997,9 +1059,9 @@ async function startCaptureSession() {
     liveEmpty.className = 'empty-transcript';
     liveEmpty.id = 'emptyTranscript';
     const liveTitle = document.createElement('strong');
-    liveTitle.textContent = 'Listening — English transcript';
+    liveTitle.textContent = 'Listening — live transcript';
     const liveNote = document.createElement('span');
-    liveNote.textContent = 'Speech appears in English. After one minute of silence, a new paragraph starts.';
+    liveNote.textContent = 'Words appear while you speak. Spanish lines include an English translation underneath.';
     liveEmpty.append(liveTitle, liveNote);
     $('#transcriptList').replaceChildren(liveEmpty);
     $('#navTranscriptCount').textContent = String(state.sessions.length);

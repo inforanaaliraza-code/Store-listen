@@ -187,7 +187,10 @@ svg { display: block; }
 .transcript-paragraph-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .transcript-paragraph-label { color: #6f8376; font-size: 11px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
 .transcript-paragraph-body { margin: 0; color: #24362c; font-size: 19px; line-height: 1.7; overflow-wrap: anywhere; }
-.transcript-paragraph-original { margin: 8px 0 0; color: #6a7d70; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.transcript-paragraph-en { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 0; color: #2f6b4d; font-size: 16px; line-height: 1.55; overflow-wrap: anywhere; }
+.transcript-en-tag { flex: 0 0 auto; margin-top: 2px; padding: 2px 6px; border: 1px solid #d5e6da; border-radius: 3px; color: #2f6b4d; background: #f1f8f3; font-size: 10px; font-weight: 750; letter-spacing: .04em; }
+.transcript-partial { opacity: 0.88; border-style: dashed; }
+.transcript-partial .transcript-paragraph-body { color: #3d5c4a; }
 .mic-waveform { display: flex; align-items: end; gap: 2px; height: 22px; min-width: 56px; }
 .mic-waveform i { width: 3px; border-radius: 2px; background: #98a59b; min-height: 4px; transition: height .08s linear, background .12s ease; }
 .capture-bar.recording .mic-waveform i { background: #cf7755; }

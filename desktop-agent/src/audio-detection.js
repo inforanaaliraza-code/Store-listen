@@ -1,21 +1,21 @@
 (function initializeVoiceDetection(globalScope) {
   const config = Object.freeze({
-    // Premium gate: only sustained clear speech — skip noise that Whisper invents words for.
-    minRms: 0.01,
-    rmsThreshold: 0.012,
-    peakThreshold: 0.05,
-    snr: 2.1,
-    minSpeechRatio: 0.32,
+    // Fast live path: open quickly, cut often, stream provisional text while speaking.
+    minRms: 0.009,
+    rmsThreshold: 0.011,
+    peakThreshold: 0.045,
+    snr: 2.0,
+    minSpeechRatio: 0.28,
     minZcr: 0.012,
     maxZcr: 0.4,
-    startFrames: 4,
-    endFrames: 9,
-    silenceHangoverMs: 580,
-    // Longer phrases = more real speech context for accurate STT.
-    maxSegmentMs: 4800,
-    minClipMs: 900,
-    previewIntervalMs: 4500,
-    livePreviewEnabled: false,
+    startFrames: 3,
+    endFrames: 6,
+    silenceHangoverMs: 320,
+    // Short clips + live previews so words appear before the full sentence ends.
+    maxSegmentMs: 1600,
+    minClipMs: 380,
+    previewIntervalMs: 1100,
+    livePreviewEnabled: true,
   });
 
   function calculateAudioEnergy(samples) {

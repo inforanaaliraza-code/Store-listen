@@ -84,7 +84,11 @@
     const value = String(text || '');
     if (/[¿¡ñáéíóúü]/i.test(value)) return true;
     const lowered = value.toLowerCase();
-    const hits = ['hola', 'gracias', 'señor', 'senor', 'tenemos', 'producto', 'necesito', 'cuanto', 'cuánto', 'por favor', 'dolares', 'dólares', 'buenos', 'buenas', 'adios', 'adiós'];
+    const hits = [
+      'hola', 'gracias', 'señor', 'senor', 'tenemos', 'producto', 'necesito', 'cuanto', 'cuánto',
+      'por favor', 'dolares', 'dólares', 'buenos', 'buenas', 'adios', 'adiós', 'este', 'pocos',
+      'solo', 'unos', 'sí', 'si senor', 'si señor',
+    ];
     return hits.filter((token) => lowered.includes(token)).length >= 1;
   }
 
@@ -126,11 +130,10 @@
   }
 
   function formatParagraphPlain(entries) {
-    // Spec: exports and archives prefer always-English conversation text.
-    const english = formatParagraphEnglish(entries);
     const spoken = formatParagraphSpoken(entries);
-    if (spoken && spoken !== english) return `${english}\nES: ${spoken}`;
-    return english || spoken;
+    const staff = formatParagraphStaffEnglish(entries);
+    if (staff && staff !== spoken) return `${spoken}\nEN: ${staff}`;
+    return spoken;
   }
 
   function formatTime(value) {
@@ -190,8 +193,8 @@
       return `
     <article class="entry">
       <header><strong>Paragraph ${index + 1}</strong><span>${stamp}</span></header>
-      <p>${escapeHtml(english || spoken || 'No speech recognized.')}</p>
-      ${spoken && spoken !== english ? `<p class="en"><strong>ES</strong> ${escapeHtml(spoken)}</p>` : ''}
+      <p>${escapeHtml(spoken || 'No speech recognized.')}</p>
+      ${english && english !== spoken ? `<p class="en"><strong>EN</strong> ${escapeHtml(english)}</p>` : ''}
     </article>`;
     }).join('');
     return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>
@@ -206,6 +209,7 @@
     filename,
     groupEntriesIntoParagraphs,
     paragraphParts,
+    looksLikeSpanishText,
     formatParagraphSpoken,
     formatParagraphStaffEnglish,
     formatParagraphEnglish,

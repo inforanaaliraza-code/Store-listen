@@ -100,24 +100,27 @@ function looksLikeSpanishText(text: string) {
   return hits.some((token) => lowered.includes(token));
 }
 
-/** Spec: Live Monitor always shows English text. */
 function lineEnglish(line: Line) {
   const spanish = line.language === 'es' || looksLikeSpanishText(line.original);
   if (!spanish) return line.original;
   if (line.translated && line.translated !== line.original && !looksLikeSpanishText(line.translated)) {
     return line.translated;
   }
-  return line.original;
+  return '';
+}
+
+function paragraphSpoken(lines: Line[]) {
+  return lines.map((line) => line.original).join(' ').trim();
 }
 
 function paragraphEnglish(lines: Line[]) {
-  return lines.map(lineEnglish).join(' ').trim();
-}
-
-function paragraphOriginalSpanish(lines: Line[]) {
   const hasSpanish = lines.some((line) => line.language === 'es' || looksLikeSpanishText(line.original));
   if (!hasSpanish) return '';
-  return lines.map((line) => line.original).join(' ').trim();
+  return lines.map((line) => {
+    const spanish = line.language === 'es' || looksLikeSpanishText(line.original);
+    if (!spanish) return line.original;
+    return lineEnglish(line);
+  }).filter(Boolean).join(' ').trim();
 }
 
 function storeLocation(store?: Store | null) {
@@ -505,17 +508,18 @@ export default function LivePage() {
                 {card.lines.length ? (
                   <div className="monitor-conversation-paragraphs">
                     {groupLinesIntoParagraphs(card.lines).map((paragraph, index) => {
+                      const spoken = paragraphSpoken(paragraph.lines);
                       const english = paragraphEnglish(paragraph.lines);
-                      const originalEs = paragraphOriginalSpanish(paragraph.lines);
+                      const hasSpanish = paragraph.lines.some((line) => line.language === 'es' || looksLikeSpanishText(line.original));
                       return (
                         <article key={`${paragraph.startedAt}-${index}`} className="monitor-paragraph">
                           <header className="monitor-paragraph-meta">
                             <span>Paragraph {String(index + 1).padStart(2, '0')}</span>
                             <time>{formatParagraphTime(paragraph.startedAt)}</time>
                           </header>
-                          <p className="monitor-paragraph-body">{english || 'No speech detected.'}</p>
-                          {originalEs && originalEs !== english ? (
-                            <p className="monitor-paragraph-original">ES: {originalEs}</p>
+                          <p className="monitor-paragraph-body">{spoken || 'No speech detected.'}</p>
+                          {hasSpanish ? (
+                            <p className="monitor-paragraph-en"><span className="monitor-en-tag">EN</span> {english || 'Translating…'}</p>
                           ) : null}
                         </article>
                       );

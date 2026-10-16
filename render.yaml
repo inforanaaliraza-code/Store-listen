@@ -62,9 +62,9 @@ services:
       - key: WHISPER_NUM_WORKERS
         value: "1"
       - key: WHISPER_TRANSLATE_SPANISH
-        value: "false"
+        value: "true"
       - key: WHISPER_PREVIEW_ENABLED
-        value: "false"
+        value: "true"
       - key: WHISPER_WARMUP_ON_START
         value: "false"
       - key: POS_PROVIDER

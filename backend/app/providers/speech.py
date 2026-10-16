@@ -252,7 +252,7 @@ class WhisperSpeechProvider(SpeechProvider):
                 original,
                 sanitize_transcript(" ".join(segment.text.strip() for segment in translations)),
             )
-            translated = polished or original
+            translated = polished if is_usable_english_translation(original, polished) else ""
         return SpeechResult(original, language, translated, confidence, True, "spk-unassigned")
 
 
@@ -401,9 +401,12 @@ class CloudSpeechProvider(SpeechProvider):
                         original,
                         self._chat_translate_spanish(client, config, original),
                     )
-                    translated = retry or original
+                    translated = retry or ""
                 except Exception:
-                    translated = original
+                    translated = ""
+            # Never leave Spanish in the English field — staff must see EN or an empty pending line.
+            if not is_usable_english_translation(original, translated):
+                translated = ""
 
         self.name = config["label"] or "cloud"
         logger.info(
