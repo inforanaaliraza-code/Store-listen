@@ -187,8 +187,12 @@ def test_store_manager_cannot_access_other_store_records_or_actions():
     assert [store["id"] for store in settings["stores"]] == ["store-001"]
     assert [user["id"] for user in settings["users"]] == ["user-manager"]
 
-    with client.websocket_connect("/ws/stores/store-001", subprotocols=["storelisten.v1", headers["Authorization"].split()[-1]]):
+    token = headers["Authorization"].split()[-1]
+    with client.websocket_connect("/ws/stores/store-001", subprotocols=["storelisten.v1", token]):
         pass
+    with client.websocket_connect(f"/ws/stores/store-001?token={token}", subprotocols=["storelisten.v1"]) as store_socket:
+        store_socket.send_text("ping")
+        assert store_socket.receive_text() == "pong"
     with __import__("pytest").raises(WebSocketDisconnect) as error:
         with client.websocket_connect("/ws/stores/store-003", subprotocols=["storelisten.v1", headers["Authorization"].split()[-1]]):
             pass

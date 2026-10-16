@@ -5,10 +5,12 @@ const deviceHealth = window.StoreListenDeviceHealth;
 const { isDeviceSessionExpired } = window.StoreListenDeviceConfig;
 const { stopCaptureAndDrain } = window.StoreListenRecordingLifecycle;
 const { formatUserError } = window.StoreListenErrorMessages;
-const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 1600;
-const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 240;
-const RECORDER_TIMESLICE_MS = 1000;
-const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 900, 1200);
+const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 1400;
+const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 200;
+const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 4500, 1000);
+const LIVE_PREVIEW_ENABLED = voiceDetection.config?.livePreviewEnabled === true;
+const RECORDER_TIMESLICE_MS = 400;
+const MAX_PARALLEL_UPLOADS = 4;
 const setupScreen = $('#setupScreen');
 const appScreen = $('#appScreen');
 const state = {
@@ -31,6 +33,7 @@ const state = {
   setupHealthTimer: null,
   clockTimer: null,
   reactivationPromise: null,
+  captureRetryTimer: null,
 };
 
 function showError(element, message) {
@@ -584,9 +587,38 @@ function addTranscript(segment) {
   if (state.view === 'transcripts') renderTranscriptArchive();
 }
 
+function refreshUploadDrain(capture) {
+  capture.uploadQueue = Promise.allSettled([...capture.inflightUploads]).then(() => undefined);
+  if (!capture.inflightUploads.size) {
+    $('#deliveryStat').innerHTML = '<i class="stat-dot"></i>Live';
+  } else {
+    $('#deliveryStat').innerHTML = `<i class="stat-dot pending"></i>Transcribing ${capture.activeUploads || capture.inflightUploads.size}`;
+  }
+}
+
+async function waitForUploadSlot(capture) {
+  while ((capture.activeUploads || 0) >= MAX_PARALLEL_UPLOADS) {
+    if (!capture.inflightUploads.size) break;
+    await Promise.race([...capture.inflightUploads]);
+  }
+}
+
+function showPendingTranscript(capture, sequence) {
+  const pendingId = `pending-${sequence}`;
+  if (capture.pendingIds?.has(pendingId)) return;
+  capture.pendingIds = capture.pendingIds || new Set();
+  capture.pendingIds.add(pendingId);
+  renderLiveTranscript(capture.session, `Transcribing clip ${sequence}…`, true);
+  $('#captureMessage').textContent = 'Speech captured — cloud transcription usually finishes in a few seconds.';
+}
+
+function clearPendingTranscript(capture, sequence) {
+  capture.pendingIds?.delete(`pending-${sequence}`);
+}
+
 async function uploadSegment(capture, blob, sequence, offset, duration) {
   if (!blob.size) return;
-  $('#deliveryStat').innerHTML = '<i class="stat-dot pending"></i>Sending';
+  showPendingTranscript(capture, sequence);
   const uploadStartedAt = performance.now();
   const response = await window.storeListen.uploadAudio({
     apiBase: state.config.apiBase,
@@ -604,12 +636,14 @@ async function uploadSegment(capture, blob, sequence, offset, duration) {
       session_offset_seconds: Math.max(0, offset),
     },
   });
+  clearPendingTranscript(capture, sequence);
   setHidden('#liveTranscriptPreview', true);
   setText('#liveTranscriptPreviewText', '');
   if (response.segment) addTranscript({
     ...response.segment,
     transcriptionMs: response.transcription_ms,
     roundTripMs: Math.round(performance.now() - uploadStartedAt),
+    speechProvider: response.speech_provider,
   });
   else {
     capture.latestPreviewText = '';
@@ -619,8 +653,33 @@ async function uploadSegment(capture, blob, sequence, offset, duration) {
     }
   }
   if (response.segment) showError($('#captureError'), '');
-  $('#deliveryStat').innerHTML = '<i class="stat-dot"></i>Live';
   setApiStatus(true);
+}
+
+function enqueueUpload(capture, blob, sequence, offset, duration) {
+  const job = (async () => {
+    await waitForUploadSlot(capture);
+    capture.activeUploads = (capture.activeUploads || 0) + 1;
+    refreshUploadDrain(capture);
+    try {
+      await uploadSegment(capture, blob, sequence, offset, duration);
+    } finally {
+      capture.activeUploads = Math.max(0, (capture.activeUploads || 1) - 1);
+    }
+  })().catch(async (error) => {
+    clearPendingTranscript(capture, sequence);
+    if (await returnToDeviceActivation(error)) return;
+    showError($('#captureError'), `${error.message} Capture is pausing so audio is not silently lost.`);
+    capture.requested = false;
+    setApiStatus(false);
+    window.setTimeout(() => { void stopCapture(); }, 0);
+  });
+  capture.inflightUploads.add(job);
+  refreshUploadDrain(capture);
+  void job.finally(() => {
+    capture.inflightUploads.delete(job);
+    refreshUploadDrain(capture);
+  });
 }
 
 function beginRecorder(capture) {
@@ -635,20 +694,24 @@ function beginRecorder(capture) {
   const recorder = new MediaRecorder(capture.stream, { mimeType, audioBitsPerSecond: 64_000 });
   const chunks = [];
   const startedAt = Date.now();
-  let previewInFlight = false;
-  let lastPreviewAt = 0;
-  let previewSequence = 0;
+  const previewThrottle = LIVE_PREVIEW_ENABLED && voiceDetection.createPreviewThrottle
+    ? voiceDetection.createPreviewThrottle(PREVIEW_INTERVAL_MS)
+    : null;
+  capture.previewThrottle = previewThrottle;
+  capture.previewSequence = 0;
+  capture.previewInFlight = false;
   capture.recorder = recorder;
   capture.segmentStartedAt = startedAt;
   recorder.ondataavailable = (event) => {
     if (!event.data.size) return;
     chunks.push(event.data);
+    // Live Whisper previews are off by default so final transcripts stay on the fast CPU path.
+    if (!LIVE_PREVIEW_ENABLED || !capture.requested || !capture.previewThrottle || capture.previewInFlight) return;
     const now = Date.now();
-    if (recorder.state !== 'recording' || !capture.requested || previewInFlight
-      || now - startedAt < PREVIEW_INTERVAL_MS || now - lastPreviewAt < PREVIEW_INTERVAL_MS) return;
-    previewInFlight = true;
-    lastPreviewAt = now;
+    if (!capture.previewThrottle.shouldSend(now)) return;
     const previewBlob = new Blob(chunks, { type: mimeType });
+    capture.previewInFlight = true;
+    const previewSequence = ++capture.previewSequence;
     void (async () => {
       try {
         const response = await window.storeListen.previewAudio({
@@ -662,10 +725,10 @@ function beginRecorder(capture) {
             store_id: state.config.storeId,
             conversation_id: capture.conversationId,
             capture_sequence: capture.sequence + 1,
-            preview_sequence: ++previewSequence,
+            preview_sequence: previewSequence,
           },
         });
-        const partialText = response.segment?.originalText;
+        const partialText = response.segment?.originalText || response.segment?.translatedText;
         if (partialText && capture.requested && capture.recorder === recorder) {
           capture.latestPreviewText = partialText;
           renderLiveTranscript(capture.session, partialText, true);
@@ -673,7 +736,7 @@ function beginRecorder(capture) {
       } catch {
         // Final transcription remains authoritative if a provisional preview fails.
       } finally {
-        previewInFlight = false;
+        capture.previewInFlight = false;
       }
     })();
   };
@@ -691,13 +754,7 @@ function beginRecorder(capture) {
     capture.offset = offset + duration;
     if (blob.size && durationMs >= MIN_CLIP_MS) {
       const sequence = ++capture.sequence;
-      capture.uploadQueue = capture.uploadQueue.then(() => uploadSegment(capture, blob, sequence, offset, duration)).catch(async (error) => {
-        if (await returnToDeviceActivation(error)) return;
-        showError($('#captureError'), `${error.message} Capture is pausing so audio is not silently lost.`);
-        capture.requested = false;
-        setApiStatus(false);
-        window.setTimeout(() => { void stopCapture(); }, 0);
-      });
+      enqueueUpload(capture, blob, sequence, offset, duration);
     }
     if (capture.requested && capture.speaking) beginRecorder(capture);
   };
@@ -718,7 +775,8 @@ function monitorVoice(capture) {
     const result = gate
       ? gate.observe(samples, spectrum, capture.audioContext.sampleRate, performance.now())
       : { state: (voiceDetection.shouldVoiceTrigger?.(samples) ? 'start' : 'idle') };
-    if (result.state === 'start') {
+    const energyStart = !capture.speaking && voiceDetection.shouldVoiceTrigger?.(samples);
+    if (result.state === 'start' || energyStart) {
       capture.speaking = true;
       renderLiveTranscript(capture.session, capture.latestPreviewText || '', true);
       $('#captureTitle').textContent = 'Voice detected';
@@ -850,13 +908,20 @@ async function startCaptureSession() {
       voiceFrame: 0,
       speaking: false,
       latestPreviewText: '',
+      previewThrottle: null,
+      previewInFlight: false,
+      previewSequence: 0,
       uploadQueue: Promise.resolve(),
+      inflightUploads: new Set(),
+      activeUploads: 0,
+      pendingIds: new Set(),
       sequence: 0,
       offset: 0,
       startedAt: Date.now(),
       segmentStartedAt: 0,
       stopPromise: null,
     };
+    window.clearTimeout(state.captureRetryTimer);
     setCaptureUi(true);
     setMicrophoneStatus('Active', 'ok');
     monitorVoice(state.capture);
@@ -866,6 +931,10 @@ async function startCaptureSession() {
     (state.capture?.stream || stream)?.getTracks().forEach((track) => track.stop());
     state.capture = null;
     setCaptureUi(false);
+    window.clearTimeout(state.captureRetryTimer);
+    state.captureRetryTimer = window.setTimeout(() => {
+      if (state.config && !state.capture) void startCapture();
+    }, 4000);
     setMicrophoneStatus('Permission needed', 'bad');
     const message = error instanceof Error ? error.message : '';
     if (error?.name === 'OverconstrainedError' || error?.name === 'ConstraintNotSatisfiedError') {

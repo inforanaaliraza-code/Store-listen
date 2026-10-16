@@ -52,6 +52,7 @@ from app.providers.speech import (
     UnsupportedLanguageDetected,
     get_speech_provider,
     normalize_supported_language,
+    resolve_speech_provider_name,
 )
 from app.security import create_access_token, current_user, decode_token, hash_device_secret, new_device_secret, verify_password
 from app.services.demo_live import run_live_demo
@@ -190,7 +191,7 @@ class PosWebhookBody(BaseModel):
 
 
 class DeviceHealthPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     cpu_pct: float = Field(ge=0, le=100)
     memory_pct: float = Field(ge=0, le=100)
@@ -299,6 +300,7 @@ def ready(db: Session = Depends(get_db)) -> dict[str, Any]:
             "redis": "optional",
             "ai": settings.ai_provider,
             "speech": settings.speech_provider,
+            "speech_resolved": resolve_speech_provider_name(),
             "pos": settings.pos_provider,
         },
     }
@@ -1230,7 +1232,16 @@ async def preview_audio_transcription(
     db: Session = Depends(get_db),
     actor: tuple[User | None, StoreDevice | None] = Depends(_audio_actor),
 ) -> dict[str, Any]:
-    """Transcribe an in-progress local recording and broadcast a provisional line."""
+    """Optional provisional transcript. Disabled by default so final Whisper stays on the fast path."""
+    if not settings.whisper_preview_enabled:
+        # Drain the upload so clients do not hang, but never burn CPU on a second Whisper pass.
+        await audio.read(MAX_AUDIO_BYTES + 1)
+        return {
+            "segment": None,
+            "preview_sequence": preview_sequence,
+            "transcription_ms": 0,
+            "preview_status": "disabled_for_latency",
+        }
     store = _audio_store(db, store_id, actor)
     if not store:
         raise HTTPException(404, "Store not found")
@@ -1282,7 +1293,7 @@ async def preview_audio_transcription(
         "translatedText": result.translated_text,
         "confidence": result.confidence,
         "isFinal": False,
-        "source": "local_whisper_preview",
+        "source": f"{provider.name}_preview",
         "transcriptionMs": transcription_ms,
         "timestamp": datetime.now(UTC).isoformat(),
     }
@@ -1432,8 +1443,8 @@ async def transcribe_audio(
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
         db.rollback()
-        logger.exception("Speech transcription failed store_id=%s", store_id)
-        raise HTTPException(502, "Local speech transcription failed. Check audio format and local Whisper model availability.") from exc
+        logger.exception("Speech transcription failed store_id=%s provider=%s", store_id, provider.name)
+        raise HTTPException(502, "Speech transcription failed. Check audio format and SPEECH_PROVIDER / API key configuration.") from exc
 
     segment_id = f"seg-{uuid4().hex[:12]}"
     safe_speaker_id = "speaker-customer" if speaker_role == "customer" else f"speaker-{employee.id}" if employee else "speaker-unknown"
@@ -1489,38 +1500,98 @@ async def transcribe_audio(
         "translatedText": result.translated_text,
         "confidence": result.confidence,
         "isFinal": True,
-        "source": "local_whisper",
+        "source": provider.name,
+        "transcriptionMs": transcription_ms,
         "timestamp": datetime.now(UTC).isoformat(),
     }
     db.commit()
+    # Publish transcript immediately so dashboards update before slower AI analysis.
     await hub.publish(f"store:{store_id}", event_payload)
-    ai_result = await run_in_threadpool(
-        analyze_and_persist,
-        db,
-        conversation_id=conversation.id,
-        store_id=store_id,
-        employee_id=conversation.employee_id,
-        original_text=result.original_text,
-        translated_text=result.translated_text,
-        language=result.language,
-        speaker_role=speaker_role,
-    )
-    if ai_result is not None:
-        db.commit()
+
+    analysis_payload = None
+    analysis_status = "speaker_unattributed" if speaker_role == "unknown" else "unavailable_check_ai_provider_and_key"
+    if speaker_role != "unknown":
+        # Mock AI is instantaneous — keep it inline for tests/demo.
+        # Real cloud AI runs after the HTTP response so transcripts stay snappy.
+        if settings.ai_provider == "mock":
+            ai_result = await run_in_threadpool(
+                analyze_and_persist,
+                db,
+                conversation_id=conversation.id,
+                store_id=store_id,
+                employee_id=conversation.employee_id,
+                original_text=result.original_text,
+                translated_text=result.translated_text,
+                language=result.language,
+                speaker_role=speaker_role,
+            )
+            if ai_result is not None:
+                db.commit()
+                analysis_payload = {
+                    "intent": ai_result.intent,
+                    "product": ai_result.product,
+                    "opportunity": ai_result.opportunity,
+                    "recommendation": ai_result.recommendation,
+                    "confidence": ai_result.confidence,
+                    "provider": settings.ai_provider,
+                }
+                analysis_status = "available"
+        else:
+            analysis_status = "pending"
+            conversation_id_for_ai = conversation.id
+            employee_id_for_ai = conversation.employee_id
+            original_text = result.original_text
+            translated_text = result.translated_text
+            language = result.language
+
+            async def _analyze_after_response() -> None:
+                try:
+                    def _run() -> Any:
+                        with SessionLocal() as ai_db:
+                            ai_result = analyze_and_persist(
+                                ai_db,
+                                conversation_id=conversation_id_for_ai,
+                                store_id=store_id,
+                                employee_id=employee_id_for_ai,
+                                original_text=original_text,
+                                translated_text=translated_text,
+                                language=language,
+                                speaker_role=speaker_role,
+                            )
+                            if ai_result is not None:
+                                ai_db.commit()
+                            return ai_result
+
+                    ai_result = await run_in_threadpool(_run)
+                    if ai_result is not None:
+                        await hub.publish(
+                            f"store:{store_id}",
+                            {
+                                "event": "analysis.ready",
+                                "conversationId": conversation_id_for_ai,
+                                "segmentId": segment_id,
+                                "storeId": store_id,
+                                "intent": ai_result.intent,
+                                "product": ai_result.product,
+                                "opportunity": ai_result.opportunity,
+                                "recommendation": ai_result.recommendation,
+                                "confidence": ai_result.confidence,
+                                "provider": settings.ai_provider,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            },
+                        )
+                except Exception:
+                    logger.exception("Background AI analysis failed conversation_id=%s", conversation_id_for_ai)
+
+            asyncio.create_task(_analyze_after_response())
+
     return {
         "conversation_id": conversation.id,
         "segment": event_payload,
         "speech_provider": provider.name,
         "transcription_ms": transcription_ms,
-        "analysis": None if ai_result is None else {
-            "intent": ai_result.intent,
-            "product": ai_result.product,
-            "opportunity": ai_result.opportunity,
-            "recommendation": ai_result.recommendation,
-            "confidence": ai_result.confidence,
-            "provider": settings.ai_provider,
-        },
-        "analysis_status": "available" if ai_result is not None else "speaker_unattributed" if speaker_role == "unknown" else "unavailable_check_ai_provider_and_key",
+        "analysis": analysis_payload,
+        "analysis_status": analysis_status,
         "raw_audio_stored": True,
         "audio_recording_id": audio_recording.id,
     }
@@ -2063,9 +2134,18 @@ def patch_task(task_id: str, body: TaskPatch, db: Session = Depends(get_db), use
     return {"id": task.id, "status": task.status, "title": task.title}
 
 
+def _websocket_token(websocket: WebSocket) -> str:
+    protocols = [str(item) for item in websocket.scope.get("subprotocols", [])]
+    if len(protocols) >= 2 and protocols[0] == WEBSOCKET_AUTH_PROTOCOL and protocols[1]:
+        return protocols[1]
+    query_token = str(websocket.query_params.get("token") or "").strip()
+    if query_token:
+        return query_token
+    return str(websocket.cookies.get("sl_session") or "")
+
+
 async def _ws_auth(websocket: WebSocket) -> User | None:
-    protocols = websocket.scope.get("subprotocols", [])
-    token = protocols[1] if len(protocols) == 2 and protocols[0] == WEBSOCKET_AUTH_PROTOCOL else websocket.cookies.get("sl_session")
+    token = _websocket_token(websocket)
     if not token:
         await websocket.close(code=4401)
         return None
@@ -2115,7 +2195,9 @@ async def ws_store(websocket: WebSocket, store_id: str):
     await hub.connect(f"store:{store_id}", websocket, subprotocol=WEBSOCKET_AUTH_PROTOCOL if websocket.scope.get("subprotocols", []) else None)
     try:
         while True:
-            await websocket.receive_text()
+            message = await websocket.receive_text()
+            if message in {"ping", "keepalive"}:
+                await websocket.send_text("pong")
     except WebSocketDisconnect:
         await hub.disconnect(f"store:{store_id}", websocket)
 

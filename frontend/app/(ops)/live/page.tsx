@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from '@/lib/router-link';
-import { AUDIO_TRANSCRIPTION_TIMEOUT_MS, apiGet, apiPost, apiUpload, getToken, WS_URL, type Store } from '../../../lib/api';
+import { AUDIO_TRANSCRIPTION_TIMEOUT_MS, apiGet, apiPost, apiUpload, getToken, WS_URL, openStoreSocket, type Store } from '../../../lib/api';
 import { createVoiceGate, voiceActivityConfig } from '../../../lib/voice-activity';
 
 type LiveEvent = {
@@ -132,6 +132,7 @@ type TranscriptionResponse = {
     timestamp: string;
   };
   speech_provider: string;
+  transcription_ms?: number;
   analysis: null | { intent: string; product: string; opportunity: boolean; recommendation: string; confidence: number; provider: string };
   analysis_status: string;
   detected_language?: string;
@@ -171,6 +172,8 @@ export default function LivePage() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const captureTimerRef = useRef<number | null>(null);
   const uploadQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const inflightUploadsRef = useRef(new Set<Promise<void>>());
+  const activeUploadsRef = useRef(0);
   const chunkSequenceRef = useRef(0);
   const chunkStartedAtRef = useRef(0);
   const sessionElapsedSecondsRef = useRef(0);
@@ -210,7 +213,7 @@ export default function LivePage() {
   const storeEmployees = employees.filter((employee) => employee.store_id === storeId);
 
   const resyncLiveTranscript = useCallback(async () => {
-    const params = new URLSearchParams({ store_id: storeId, page_size: '1' });
+    const params = new URLSearchParams({ store_id: storeId, status: 'LIVE', page_size: '1' });
     const response = await apiGet<{ conversations: { items: { id: string; started_at: string; status: string }[] } }>(`/api/v1/conversations?${params}`);
     if (!response.conversations.items.length) {
       liveConversationIdRef.current = '';
@@ -274,15 +277,6 @@ export default function LivePage() {
   }, [capturing]);
 
   const connect = useCallback(() => {
-    if (transcriptClearTimerRef.current !== null) window.clearTimeout(transcriptClearTimerRef.current);
-    transcriptClearTimerRef.current = null;
-    endedConversationIdRef.current = '';
-    liveConversationIdRef.current = '';
-    liveConversationStartedAtRef.current = 0;
-    segmentIdsRef.current.clear();
-    setLines([]);
-    setPartial('');
-    setConversationStatus('WAITING');
     replacingRef.current = true;
     socketRef.current?.close();
     replacingRef.current = false;
@@ -291,20 +285,35 @@ export default function LivePage() {
       return;
     }
     const token = getToken();
-    const socket = new WebSocket(`${WS_URL}/ws/stores/${storeId}`, ['storelisten.v1', token]);
+    if (!token) {
+      setCaptureError('Sign in again to listen to live store audio.');
+      return;
+    }
+    let socket: WebSocket;
+    try {
+      socket = openStoreSocket(storeId, token);
+    } catch (cause) {
+      setCaptureError(cause instanceof Error ? cause.message : 'Unable to open the live store connection.');
+      return;
+    }
     socketRef.current = socket;
+    const pingTimer = window.setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) socket.send('ping');
+    }, 15_000);
     socket.onopen = () => {
       if (!aliveRef.current || socketRef.current !== socket) {
         socket.close();
         return;
       }
       setConnected(true);
+      setCaptureError('');
       retryRef.current = 1000;
       void resyncLiveTranscript().catch(() => {
         setCaptureError('Live connection restored, but recent transcript history could not be synchronized.');
       });
     };
     socket.onclose = () => {
+      window.clearInterval(pingTimer);
       setConnected(false);
       if (!aliveRef.current || replacingRef.current || socketRef.current !== socket) return;
       window.setTimeout(() => {
@@ -312,19 +321,17 @@ export default function LivePage() {
       }, retryRef.current);
       retryRef.current = Math.min(retryRef.current * 2, 8000);
     };
-    socket.onerror = () => setCaptureError('Live connection interrupted. Reconnecting…');
+    socket.onerror = () => {
+      if (socket.readyState !== WebSocket.OPEN) setCaptureError('Live connection interrupted. Reconnecting…');
+    };
     socket.onmessage = (message) => {
       let parsed: unknown;
       try {
         parsed = JSON.parse(message.data);
       } catch {
-        setCaptureError('Received an invalid live event. Reconnecting…');
-        socket.close(1007, 'Invalid event payload');
         return;
       }
       if (!parsed || typeof parsed !== 'object' || !('event' in parsed) || typeof parsed.event !== 'string') {
-        setCaptureError('Received an invalid live event. Reconnecting…');
-        socket.close(1007, 'Invalid event payload');
         return;
       }
       const event = parsed as LiveEvent;
@@ -424,7 +431,8 @@ export default function LivePage() {
     form.append('session_offset_seconds', String(sessionOffsetSeconds));
     if (role === 'employee') form.append('employee_id', selectedEmployeeId);
     if (conversationIdRef.current) form.append('conversation_id', conversationIdRef.current);
-    setCaptureStatus(`Transcribing clip ${sequence} locally…`);
+    setCaptureStatus(`Transcribing clip ${sequence}…`);
+    setPartial(`Transcribing clip ${sequence}…`);
     const result = await apiUpload<TranscriptionResponse>('/api/v1/audio/transcribe', form, AUDIO_TRANSCRIPTION_TIMEOUT_MS);
     finalCaptureSequenceRef.current = Math.max(finalCaptureSequenceRef.current, sequence);
     setPartial('');
@@ -434,7 +442,7 @@ export default function LivePage() {
       setAnalysisNotice(result.analysis_status === 'no_speech'
         ? 'No speech detected in this clip; listening continues.'
         : `Ignored unsupported language${result.detected_language ? ` (${result.detected_language})` : ''}; English, Spanish, Hindi, and Urdu are transcribed.`);
-      setCaptureStatus('Recording · local transcription active');
+      setCaptureStatus(`Recording · ${result.speech_provider || 'speech'} ready`);
       return;
     }
     segmentIdsRef.current.add(segment.segmentId);
@@ -448,14 +456,19 @@ export default function LivePage() {
       confidence: segment.confidence,
       final: true,
     }]);
-    setCaptureStatus(`Recording · local ${result.speech_provider} transcription active`);
+    const sttLabel = result.transcription_ms != null
+      ? ` · STT ${(result.transcription_ms / 1000).toFixed(1)}s`
+      : '';
+    setCaptureStatus(`Recording · ${result.speech_provider} ready${sttLabel}`);
     if (result.analysis) {
       setInsight((current) => ({ ...current, intent: result.analysis?.intent ?? '', product: result.analysis?.product ?? '', tip: result.analysis?.recommendation ?? '', status: result.analysis?.opportunity ? 'Potential opportunity' : 'No opportunity detected' }));
       setAnalysisNotice(`AI analysis from ${result.analysis.provider} · ${Math.round(result.analysis.confidence * 100)}% confidence`);
     } else {
       setAnalysisNotice(result.analysis_status === 'speaker_unattributed'
         ? 'Transcript saved. Speaker is unattributed, so this clip was not scored as customer or staff speech.'
-        : 'Speech is transcribed locally. AI sales analysis is off until a real AI provider and API key are configured.');
+        : result.analysis_status === 'pending'
+          ? 'Transcript ready. Sales analysis is finishing in the background.'
+          : 'Transcript ready. AI sales analysis is off until a real AI provider and API key are configured.');
     }
   }, [storeId]);
 
@@ -536,13 +549,27 @@ export default function LivePage() {
       sessionElapsedSecondsRef.current += durationSeconds;
       if (blob.size && durationMs >= voiceActivityConfig.minClipMs) {
         const sequence = ++chunkSequenceRef.current;
-        uploadQueueRef.current = uploadQueueRef.current
-          .then(() => uploadAudioChunk(blob, sequence, durationSeconds, sessionOffsetSeconds, roleForClip, employeeForClip))
-          .then(() => undefined)
-          .catch((cause: unknown) => {
-            setCaptureError(cause instanceof Error ? cause.message : 'Audio upload/transcription failed.');
-            setCaptureStatus('Transcription error');
-          });
+        const job = (async () => {
+          while (activeUploadsRef.current >= 4) {
+            if (!inflightUploadsRef.current.size) break;
+            await Promise.race([...inflightUploadsRef.current]);
+          }
+          activeUploadsRef.current += 1;
+          try {
+            await uploadAudioChunk(blob, sequence, durationSeconds, sessionOffsetSeconds, roleForClip, employeeForClip);
+          } finally {
+            activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1);
+          }
+        })().catch((cause: unknown) => {
+          setCaptureError(cause instanceof Error ? cause.message : 'Audio upload/transcription failed.');
+          setCaptureStatus('Transcription error');
+        });
+        inflightUploadsRef.current.add(job);
+        uploadQueueRef.current = Promise.allSettled([...inflightUploadsRef.current]).then(() => undefined);
+        void job.finally(() => {
+          inflightUploadsRef.current.delete(job);
+          uploadQueueRef.current = Promise.allSettled([...inflightUploadsRef.current]).then(() => undefined);
+        });
       }
       if (pendingSpeakerRef.current) {
         speakerRoleRef.current = pendingSpeakerRef.current.role;

@@ -108,9 +108,30 @@ def test_supported_languages_include_hindi_urdu_and_arabic():
     assert normalize_supported_language("fr-FR") is None
 
 
+def test_audio_preview_is_disabled_by_default_for_latency(monkeypatch):
+    from app import api as api_module
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "whisper_preview_enabled", False)
+    client.cookies.clear()
+    login = client.post("/api/v1/auth/login", json={"email": "admin@storelisten.demo", "password": "StoreListen!2026"})
+    headers = {"Authorization": f"Bearer {login.json()['token']}"}
+    session = client.post("/api/v1/audio/sessions", headers=headers, json={"store_id": "store-001"})
+    conversation_id = session.json()["conversation_id"]
+    response = client.post(
+        "/api/v1/audio/transcribe/preview",
+        headers=headers,
+        data={"store_id": "store-001", "conversation_id": conversation_id, "capture_sequence": 2, "preview_sequence": 3},
+        files={"audio": ("live-preview.webm", b"partial audio", "audio/webm")},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["segment"] is None
+    assert response.json()["preview_status"] == "disabled_for_latency"
+
+
 def test_audio_preview_broadcasts_partial_without_saving_audio_or_transcript(monkeypatch):
     from app import api as api_module
-    from app.models import AudioSession
+    from app.config import settings
 
     class HindiSpeechProvider:
         name = "test-whisper"
@@ -123,6 +144,7 @@ def test_audio_preview_broadcasts_partial_without_saving_audio_or_transcript(mon
     async def capture_event(room, event):
         events.append((room, event))
 
+    monkeypatch.setattr(settings, "whisper_preview_enabled", True)
     monkeypatch.setattr(api_module, "get_speech_provider", lambda _name: HindiSpeechProvider())
     monkeypatch.setattr(api_module.hub, "publish", capture_event)
     client.cookies.clear()
@@ -150,7 +172,6 @@ def test_audio_preview_broadcasts_partial_without_saving_audio_or_transcript(mon
         assert db.query(AudioRecording).filter(AudioRecording.conversation_id == conversation_id).count() == 0
         assert db.query(TranscriptSegment).filter(TranscriptSegment.conversation_id == conversation_id).count() == 0
     finally:
-        db.query(AudioSession).filter(AudioSession.conversation_id == conversation_id).delete(synchronize_session=False)
         db.query(Conversation).filter(Conversation.id == conversation_id).delete(synchronize_session=False)
         db.commit()
         db.close()
@@ -177,8 +198,11 @@ def test_whisper_uses_configured_low_latency_beam_size(monkeypatch, tmp_path):
 
     assert result.original_text == "hello"
     assert calls[0]["beam_size"] == 1
+    assert calls[0]["best_of"] == 1
+    assert calls[0]["temperature"] == 0.0
     assert calls[0]["vad_filter"] is False
     assert calls[0]["without_timestamps"] is True
+    assert calls[0]["word_timestamps"] is False
 
 
 def test_whisper_skips_second_spanish_translation_pass_by_default(monkeypatch, tmp_path):

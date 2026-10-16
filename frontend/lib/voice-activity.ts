@@ -1,15 +1,17 @@
 export const voiceActivityConfig = {
-  minRms: 0.0007,
-  peakThreshold: 0.016,
-  snr: 1.8,
-  minSpeechRatio: 0.34,
+  minRms: 0.00035,
+  peakThreshold: 0.01,
+  snr: 1.25,
+  minSpeechRatio: 0.22,
   minZcr: 0.012,
   maxZcr: 0.42,
-  startFrames: 2,
-  endFrames: 5,
-  maxSegmentMs: 2400,
-  minClipMs: 240,
-  previewIntervalMs: 900,
+  startFrames: 1,
+  endFrames: 4,
+  silenceHangoverMs: 280,
+  maxSegmentMs: 1400,
+  minClipMs: 200,
+  previewIntervalMs: 4500,
+  livePreviewEnabled: false,
 } as const;
 
 export function calculateAudioEnergy(samples: Float32Array) {
@@ -48,7 +50,7 @@ export function speechBandRatio(frequencyDb: Float32Array, sampleRate: number) {
 }
 
 export function createVoiceGate() {
-  let noiseRms = 0.0024;
+  let noiseRms = 0.0008;
   let speaking = false;
   let voiced = 0;
   let silent = 0;
@@ -69,9 +71,8 @@ export function createVoiceGate() {
       if (!speaking) noiseRms = (noiseRms * 0.9) + (energy.rms * 0.1);
       const rmsFloor = Math.max(voiceActivityConfig.minRms, noiseRms * voiceActivityConfig.snr);
       const strongEnough = energy.rms >= rmsFloor || energy.peak >= voiceActivityConfig.peakThreshold;
-      const speechLike = ratio >= voiceActivityConfig.minSpeechRatio
-        || (zcr >= voiceActivityConfig.minZcr && zcr <= voiceActivityConfig.maxZcr);
-      const voicedNow = strongEnough && speechLike;
+      const rumble = ratio < 0.15 && zcr < 0.006 && energy.peak < 0.05;
+      const voicedNow = strongEnough && !rumble;
       if (voicedNow) {
         voiced += 1;
         silent = 0;

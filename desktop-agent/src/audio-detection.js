@@ -1,18 +1,19 @@
 (function initializeVoiceDetection(globalScope) {
   const config = Object.freeze({
-    minRms: 0.0007,
-    rmsThreshold: 0.0007,
-    peakThreshold: 0.016,
-    snr: 1.8,
-    minSpeechRatio: 0.34,
+    minRms: 0.00035,
+    rmsThreshold: 0.00035,
+    peakThreshold: 0.01,
+    snr: 1.25,
+    minSpeechRatio: 0.22,
     minZcr: 0.012,
     maxZcr: 0.42,
-    startFrames: 2,
-    endFrames: 5,
-    silenceHangoverMs: 450,
-    maxSegmentMs: 2400,
-    minClipMs: 240,
-    previewIntervalMs: 900,
+    startFrames: 1,
+    endFrames: 4,
+    silenceHangoverMs: 280,
+    maxSegmentMs: 1400,
+    minClipMs: 200,
+    previewIntervalMs: 4500,
+    livePreviewEnabled: false,
   });
 
   function calculateAudioEnergy(samples) {
@@ -61,8 +62,9 @@
     const zcr = zeroCrossingRate(samples);
     const ratio = speechBandRatio(frequencyDb, sampleRate);
     const strongEnough = rms >= rmsFloor || peak >= config.peakThreshold;
-    const speechLike = ratio >= config.minSpeechRatio || (zcr >= config.minZcr && zcr <= config.maxZcr);
-    return strongEnough && speechLike;
+    if (!strongEnough) return false;
+    const rumble = ratio < 0.15 && zcr < 0.006 && peak < 0.05;
+    return !rumble;
   }
 
   function shouldVoiceTrigger(samples, threshold = config.rmsThreshold, peakThreshold = config.peakThreshold) {
@@ -71,7 +73,7 @@
   }
 
   function createVoiceGate() {
-    let noiseRms = 0.0024;
+    let noiseRms = 0.0008;
     let speaking = false;
     let voiced = 0;
     let silent = 0;
@@ -120,11 +122,34 @@
     };
   }
 
+  function createPreviewThrottle(intervalMs = config.previewIntervalMs) {
+    let lastPreviewAt = 0;
+    let hasSent = false;
+    return {
+      reset() {
+        lastPreviewAt = 0;
+        hasSent = false;
+      },
+      shouldSend(nowMs = Date.now()) {
+        if (!hasSent) {
+          lastPreviewAt = nowMs;
+          hasSent = true;
+          return true;
+        }
+        const allowedAt = lastPreviewAt + Math.max(250, intervalMs);
+        if (nowMs < allowedAt) return false;
+        lastPreviewAt = nowMs;
+        return true;
+      },
+    };
+  }
+
   const api = {
     config,
     calculateAudioEnergy,
     shouldVoiceTrigger,
     createVoiceGate,
+    createPreviewThrottle,
     speechBandRatio,
     zeroCrossingRate,
     isVoicedFrame,

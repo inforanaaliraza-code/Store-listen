@@ -2,7 +2,7 @@
 
 import Link from '@/lib/router-link';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { apiGet, getToken, type DashboardSummary, WS_URL } from '../../../lib/api';
+import { apiGet, getToken, openStoreSocket, type DashboardSummary, WS_URL } from '../../../lib/api';
 
 type Recommendation = { id: string; title: string; message: string; confidence: number; store_id: string };
 type LiveLine = { id: string; storeId: string; speaker: string; text: string; translation?: string; at: string };
@@ -78,10 +78,19 @@ export default function DashboardPage() {
 
     function connect(storeId: string, retryDelay = 1000) {
       if (disposed) return;
-      const socket = new WebSocket(`${WS_URL}/ws/stores/${encodeURIComponent(storeId)}`, ['storelisten.v1', token]);
+      let socket: WebSocket;
+      try {
+        socket = openStoreSocket(storeId, token);
+      } catch {
+        return;
+      }
       sockets.add(socket);
+      const pingTimer = window.setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) socket.send('ping');
+      }, 15_000);
       socket.onopen = () => { retryDelay = 1000; };
       socket.onmessage = (message) => {
+        if (typeof message.data === 'string' && (message.data === 'pong' || message.data === 'ping')) return;
         scheduleRefresh();
         try {
           const event = JSON.parse(message.data) as {
@@ -130,6 +139,7 @@ export default function DashboardPage() {
         }
       };
       socket.onclose = () => {
+        window.clearInterval(pingTimer);
         sockets.delete(socket);
         if (disposed) return;
         const delay = Math.min(retryDelay, 30_000);

@@ -21,9 +21,18 @@ function inferApiUrl() {
 
 export const API_URL = import.meta.env.VITE_API_URL || inferApiUrl();
 export const WS_URL = import.meta.env.VITE_WS_URL || (API_URL ? API_URL.replace(/^http/, 'ws') : '');
+
+export function openStoreSocket(storeId: string, token: string) {
+  if (!WS_URL) {
+    throw new Error('This web release is missing its secure cloud connection URL. Contact your Store Listen administrator.');
+  }
+  const url = new URL(`${WS_URL.replace(/\/+$/, '')}/ws/stores/${encodeURIComponent(storeId)}`);
+  if (token) url.searchParams.set('token', token);
+  return new WebSocket(url.toString(), token ? ['storelisten.v1', token] : ['storelisten.v1']);
+}
 const TOKEN_KEY = 'sl_token';
 const REQUEST_TIMEOUT_MS = 20_000;
-export const AUDIO_TRANSCRIPTION_TIMEOUT_MS = 90_000;
+export const AUDIO_TRANSCRIPTION_TIMEOUT_MS = 45_000;
 
 export class ApiError extends Error {
   constructor(

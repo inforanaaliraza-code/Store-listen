@@ -12,9 +12,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+import asyncio
+
 from app.api import api, health
 from app.config import settings
 from app.database import SessionLocal, check_database_connection
+from app.providers.speech import WhisperSpeechProvider, get_speech_provider, resolve_speech_provider_name
 from app.seed import seed_if_empty
 from app.services.audio_storage import cleanup_expired_audio
 from app.services.events import hub
@@ -31,18 +34,29 @@ async def lifespan(_: FastAPI):
         enabled=settings.redis_event_bus_enabled,
         required=production,
     )
+    warm_task = None
     try:
-        if production:
-            check_database_connection()
-        else:
-            check_database_connection()
+        check_database_connection()
         with SessionLocal() as db:
             if settings.demo_mode:
                 seed_if_empty(db)
             cleanup_expired_audio(db)
-        logger.info("Store Listen API ready demo_mode=%s db=mongodb", settings.demo_mode)
+        speech_name = resolve_speech_provider_name()
+        get_speech_provider()
+        if speech_name == "whisper":
+            logger.warning(
+                "Speech provider is local Whisper — expect multi-minute latency on free CPUs. "
+                "Set SPEECH_API_KEY or AI_API_KEY and SPEECH_PROVIDER=auto for 1–3s cloud STT."
+            )
+            if settings.whisper_warmup_on_start:
+                warm_task = asyncio.create_task(asyncio.to_thread(WhisperSpeechProvider.warm_up))
+        else:
+            logger.info("Fast cloud speech provider active resolved=%s model=%s", speech_name, settings.speech_cloud_model)
+        logger.info("Store Listen API ready demo_mode=%s db=mongodb speech=%s", settings.demo_mode, speech_name)
         yield
     finally:
+        if warm_task and not warm_task.done():
+            warm_task.cancel()
         await hub.stop()
 
 app = FastAPI(title="Store Listen API", version="1.0.0", docs_url="/docs", lifespan=lifespan)
