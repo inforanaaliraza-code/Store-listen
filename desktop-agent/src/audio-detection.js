@@ -1,20 +1,20 @@
 (function initializeVoiceDetection(globalScope) {
   const config = Object.freeze({
-    // Very sensitive gate so soft store speech is not missed.
-    minRms: 0.0045,
-    rmsThreshold: 0.0065,
-    peakThreshold: 0.025,
-    snr: 1.45,
-    minSpeechRatio: 0.14,
-    minZcr: 0.008,
-    maxZcr: 0.55,
+    // Ultra-sensitive store-counter gate (soft speech + distance mics).
+    minRms: 0.0028,
+    rmsThreshold: 0.004,
+    peakThreshold: 0.015,
+    snr: 1.2,
+    minSpeechRatio: 0.08,
+    minZcr: 0.006,
+    maxZcr: 0.62,
     startFrames: 1,
-    endFrames: 4,
-    silenceHangoverMs: 160,
-    // Continuous short clips + frequent previews for near-instant live text.
-    maxSegmentMs: 520,
-    minClipMs: 160,
-    previewIntervalMs: 280,
+    endFrames: 3,
+    silenceHangoverMs: 120,
+    // Very short clips + aggressive live previews for near-instant text.
+    maxSegmentMs: 360,
+    minClipMs: 100,
+    previewIntervalMs: 150,
     livePreviewEnabled: true,
   });
 
@@ -54,7 +54,7 @@
       const hz = index * binHz;
       const linear = 10 ** (Math.max(-120, frequencyDb[index]) / 20);
       if (hz <= 220) noise += linear;
-      else if (hz >= 280 && hz <= 3800) speech += linear;
+      else if (hz >= 250 && hz <= 4200) speech += linear;
     }
     return speech / (speech + noise + 1e-9);
   }
@@ -65,8 +65,12 @@
     const ratio = speechBandRatio(frequencyDb, sampleRate);
     const strongEnough = rms >= rmsFloor || peak >= config.peakThreshold;
     if (!strongEnough) return false;
+    // Energy-only fallback: loud enough frames count even if spectrum is noisy.
+    if (rms >= Math.max(config.rmsThreshold, rmsFloor * 1.15) || peak >= config.peakThreshold * 1.4) {
+      return true;
+    }
     if (ratio < config.minSpeechRatio) return false;
-    const rumble = ratio < 0.15 && zcr < 0.006 && peak < 0.05;
+    const rumble = ratio < 0.12 && zcr < 0.005 && peak < 0.04;
     return !rumble;
   }
 
@@ -76,7 +80,7 @@
   }
 
   function createVoiceGate() {
-    let noiseRms = 0.004;
+    let noiseRms = 0.003;
     let speaking = false;
     let voiced = 0;
     let silent = 0;
@@ -96,9 +100,10 @@
         const energy = calculateAudioEnergy(samples);
         const zcr = zeroCrossingRate(samples);
         const ratio = speechBandRatio(frequencyDb, sampleRate);
-        if (!speaking) noiseRms = (noiseRms * 0.92) + (energy.rms * 0.08);
+        if (!speaking) noiseRms = (noiseRms * 0.94) + (energy.rms * 0.06);
         const rmsFloor = Math.max(config.minRms, noiseRms * config.snr);
-        const voicedNow = isVoicedFrame(samples, frequencyDb, sampleRate, rmsFloor);
+        const voicedNow = isVoicedFrame(samples, frequencyDb, sampleRate, rmsFloor)
+          || shouldVoiceTrigger(samples, rmsFloor, config.peakThreshold);
         if (voicedNow) {
           voiced += 1;
           silent = 0;
@@ -139,7 +144,7 @@
           hasSent = true;
           return true;
         }
-        const allowedAt = lastPreviewAt + Math.max(250, intervalMs);
+        const allowedAt = lastPreviewAt + Math.max(100, intervalMs);
         if (nowMs < allowedAt) return false;
         lastPreviewAt = nowMs;
         return true;

@@ -1,5 +1,9 @@
 (function initializeRecordingLifecycle(globalScope) {
-  async function stopCaptureAndDrain(capture, onInputReleased) {
+  async function stopCaptureAndDrain(capture, onInputReleased, options = {}) {
+    const maxUploadWaitMs = Number.isFinite(options.maxUploadWaitMs)
+      ? Math.max(0, options.maxUploadWaitMs)
+      : 0;
+
     const recorder = capture.recorder;
     if (recorder && recorder.state !== 'inactive') {
       await new Promise((resolve) => {
@@ -12,7 +16,13 @@
     capture.stream = null;
     if (capture.audioContext?.state !== 'closed') await capture.audioContext?.close();
     onInputReleased?.();
-    await capture.uploadQueue;
+
+    // Ultra-fast stop: never block the UI on remote STT finishing.
+    if (maxUploadWaitMs <= 0 || !capture.uploadQueue) return;
+    await Promise.race([
+      capture.uploadQueue.catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, maxUploadWaitMs)),
+    ]);
   }
 
   const lifecycle = { stopCaptureAndDrain };

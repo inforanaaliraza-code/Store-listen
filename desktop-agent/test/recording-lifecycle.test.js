@@ -2,11 +2,10 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { stopCaptureAndDrain } = require('../src/recording-lifecycle');
 
-test('stops the microphone before waiting for queued transcription uploads', async () => {
+test('stops the microphone immediately without waiting for queued transcription uploads', async () => {
   const events = [];
   let stopListener;
   let finishUpload;
-  let finalized = false;
   const uploadQueue = new Promise((resolve) => { finishUpload = resolve; });
   const capture = {
     recorder: {
@@ -24,8 +23,7 @@ test('stops the microphone before waiting for queued transcription uploads', asy
     uploadQueue,
   };
 
-  const stopping = stopCaptureAndDrain(capture, () => events.push('UI acknowledged stop')).then(() => { finalized = true; });
-  await new Promise((resolve) => setImmediate(resolve));
+  await stopCaptureAndDrain(capture, () => events.push('UI acknowledged stop'), { maxUploadWaitMs: 0 });
 
   assert.deepEqual(events, [
     'final recorder chunk',
@@ -34,9 +32,18 @@ test('stops the microphone before waiting for queued transcription uploads', asy
     'UI acknowledged stop',
   ]);
   assert.equal(capture.stream, null);
-  assert.equal(finalized, false);
-
+  // Upload may still be pending — stop must not depend on it.
   finishUpload();
-  await stopping;
-  assert.equal(finalized, true);
+});
+
+test('optional short upload wait races the queue against a deadline', async () => {
+  const capture = {
+    recorder: { state: 'inactive' },
+    stream: { getTracks: () => [] },
+    audioContext: { state: 'closed' },
+    uploadQueue: new Promise(() => {}),
+  };
+  const started = Date.now();
+  await stopCaptureAndDrain(capture, null, { maxUploadWaitMs: 40 });
+  assert.ok(Date.now() - started < 250, 'upload wait must not hang Stop');
 });

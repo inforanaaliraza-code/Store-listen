@@ -5,12 +5,13 @@ const deviceHealth = window.StoreListenDeviceHealth;
 const { isDeviceSessionExpired } = window.StoreListenDeviceConfig;
 const { stopCaptureAndDrain } = window.StoreListenRecordingLifecycle;
 const { formatUserError } = window.StoreListenErrorMessages;
-const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 520;
-const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 160;
-const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 280, 200);
+const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 360;
+const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 100;
+const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 150, 100);
 const LIVE_PREVIEW_ENABLED = voiceDetection.config?.livePreviewEnabled !== false;
-const RECORDER_TIMESLICE_MS = 100;
-const MAX_PARALLEL_UPLOADS = 8;
+const RECORDER_TIMESLICE_MS = 80;
+const MAX_PARALLEL_UPLOADS = 12;
+const STOP_UPLOAD_WAIT_MS = 0;
 const setupScreen = $('#setupScreen');
 const appScreen = $('#appScreen');
 const state = {
@@ -547,7 +548,7 @@ function clearLivePartial() {
 
 function showLivePartial(segment) {
   const original = String(segment?.originalText || '').trim();
-  if (!original || isClientJunkTranscript(original)) return;
+  if (!original || isClientJunkLive(original)) return;
   const translated = String(segment?.translatedText || '').trim();
   const language = String(segment?.language || 'en').toLowerCase();
   const spanish = language === 'es' || transcriptTools.looksLikeSpanishText?.(original)
@@ -744,11 +745,8 @@ function normalizeSpeakerLabel(label) {
 const CLIENT_JUNK_EXACT = new Set([
   'tchau', 'chao', 'obrigado', 'obrigada', 'adeus', 'valeu', 'ciao',
   'e ai', 'ai', 'ei', 'oie', 'opa',
-  'thank you', 'thanks', 'bye', 'goodbye', 'okay', 'ok', 'hmm', 'uh', 'um', 'yeah',
+  'hmm', 'uh', 'um',
   'terima kasih', 'terima kasih telah menonton',
-]);
-const CLIENT_ALLOWED_SHORT = new Set([
-  'hola', 'gracias', 'adios', 'si', 'no', 'hello', 'hi', 'yes', 'please', 'sorry', 'help',
 ]);
 
 function normalizeClientPhrase(text) {
@@ -761,21 +759,16 @@ function normalizeClientPhrase(text) {
     .trim();
 }
 
-function isClientJunkTranscript(text) {
+function isClientJunkLive(text) {
   const phrase = normalizeClientPhrase(text);
   if (!phrase) return true;
   if (CLIENT_JUNK_EXACT.has(phrase)) return true;
-  if (phrase.includes('terima kasih') || phrase.includes('menonton') || phrase.includes('thanks for watching')) {
-    return true;
-  }
-  const words = phrase.split(' ').filter(Boolean);
-  if (words.length === 1 && words[0].length <= 6 && !CLIENT_ALLOWED_SHORT.has(words[0])) {
-    return true;
-  }
-  if (words.length <= 2 && words.every((word) => word.length <= 3) && !words.some((word) => CLIENT_ALLOWED_SHORT.has(word))) {
-    return true;
-  }
-  return false;
+  return phrase.includes('terima kasih') || phrase.includes('menonton') || phrase.includes('thanks for watching');
+}
+
+function isClientJunkTranscript(text) {
+  // Keep finals permissive so short Spanish/English store words are not dropped.
+  return isClientJunkLive(text);
 }
 
 function addTranscript(segment) {
@@ -786,7 +779,7 @@ function addTranscript(segment) {
   const last = session.entries[session.entries.length - 1];
   if (last?.segment?.originalText?.trim().toLowerCase() === text.toLowerCase()) {
     const lastAt = last.capturedAt?.getTime?.() || 0;
-    if (Date.now() - lastAt < 18_000) return;
+    if (Date.now() - lastAt < 4_000) return;
   }
   const capturedAt = new Date();
   const entry = {
@@ -905,26 +898,27 @@ function beginRecorder(capture) {
     void stopCapture();
     return;
   }
-  const recorder = new MediaRecorder(capture.stream, { mimeType, audioBitsPerSecond: 64_000 });
+  const recorder = new MediaRecorder(capture.stream, { mimeType, audioBitsPerSecond: 96_000 });
   const chunks = [];
   const startedAt = Date.now();
   const previewThrottle = LIVE_PREVIEW_ENABLED && voiceDetection.createPreviewThrottle
     ? voiceDetection.createPreviewThrottle(PREVIEW_INTERVAL_MS)
     : null;
   capture.previewThrottle = previewThrottle;
-  capture.previewSequence = 0;
-  capture.previewInFlight = false;
+  capture.previewSequence = capture.previewSequence || 0;
+  capture.spokeInSegment = Boolean(capture.speaking);
   capture.recorder = recorder;
   capture.segmentStartedAt = startedAt;
   recorder.ondataavailable = (event) => {
     if (!event.data.size) return;
     chunks.push(event.data);
-    // Live Whisper previews are off by default so final transcripts stay on the fast CPU path.
-    if (!LIVE_PREVIEW_ENABLED || !capture.requested || !capture.previewThrottle || capture.previewInFlight) return;
+    if (!LIVE_PREVIEW_ENABLED || !capture.requested || !capture.previewThrottle) return;
+    // Only preview while voice is present — silence previews waste STT and hurt accuracy.
+    if (!capture.speaking && !capture.spokeInSegment) return;
     const now = Date.now();
     if (!capture.previewThrottle.shouldSend(now)) return;
     const previewBlob = new Blob(chunks, { type: mimeType });
-    capture.previewInFlight = true;
+    if (previewBlob.size < 1200) return;
     const previewSequence = ++capture.previewSequence;
     void (async () => {
       try {
@@ -942,13 +936,14 @@ function beginRecorder(capture) {
             preview_sequence: previewSequence,
           },
         });
+        // Drop stale preview responses so the newest words win.
+        if (previewSequence < (capture.previewAppliedSequence || 0)) return;
         if (response?.segment?.originalText && capture.requested) {
+          capture.previewAppliedSequence = previewSequence;
           showLivePartial(response.segment);
         }
       } catch {
         // Final transcription remains authoritative if a provisional preview fails.
-      } finally {
-        capture.previewInFlight = false;
       }
     })();
   };
@@ -957,7 +952,7 @@ function beginRecorder(capture) {
     if (capture.requested) {
       capture.recorder = null;
       setMicrophoneStatus('Microphone is active', 'ok');
-      if (capture.speaking) beginRecorder(capture);
+      beginRecorder(capture);
     }
   };
   recorder.onstop = () => {
@@ -968,7 +963,9 @@ function beginRecorder(capture) {
     const duration = Math.max(durationMs / 1000, 0.1);
     const offset = Math.max((startedAt - capture.startedAt) / 1000, 0);
     capture.offset = offset + duration;
-    if (blob.size && durationMs >= MIN_CLIP_MS) {
+    const hadVoice = capture.spokeInSegment || capture.speaking;
+    // Skip silence-only clips so STT stays fast and accurate.
+    if (hadVoice && blob.size && durationMs >= MIN_CLIP_MS) {
       const sequence = ++capture.sequence;
       enqueueUpload(capture, blob, sequence, offset, duration);
     }
@@ -994,28 +991,35 @@ function monitorVoice(capture) {
     if (!capture.requested) return;
     capture.analyser.getFloatTimeDomainData(samples);
     capture.analyser.getFloatFrequencyData(spectrum);
-    updateMicWaveform(samples, capture.speaking);
+    const energy = voiceDetection.calculateAudioEnergy?.(samples) || { rms: 0, peak: 0 };
+    const energyStart = voiceDetection.shouldVoiceTrigger?.(samples);
+    updateMicWaveform(samples, capture.speaking || energyStart);
     if (!capture.recorder) beginRecorder(capture);
     const result = gate
       ? gate.observe(samples, spectrum, capture.audioContext.sampleRate, performance.now())
-      : { state: (voiceDetection.shouldVoiceTrigger?.(samples) ? 'start' : 'idle') };
-    const energyStart = !capture.speaking && voiceDetection.shouldVoiceTrigger?.(samples);
-    if (result.state === 'start' || energyStart) {
-      capture.speaking = true;
-      $('#captureTitle').textContent = 'Voice detected';
-      $('#captureMessage').textContent = 'Microphone is active. Words appear live as you speak.';
-      setMicrophoneStatus('Microphone is active', 'ok');
-      setCaptureUi(true);
-      sendHealth({ speaking: true });
+      : { state: (energyStart ? 'start' : 'idle') };
+    const voiced = result.state === 'start'
+      || result.state === 'speech'
+      || result.state === 'rising'
+      || result.state === 'hangover'
+      || energyStart;
+    if (voiced) {
+      capture.spokeInSegment = true;
+      if (!capture.speaking || result.state === 'start' || energyStart) {
+        capture.speaking = true;
+        $('#captureTitle').textContent = 'Voice detected';
+        $('#captureMessage').textContent = 'Live words appear as you speak.';
+        setMicrophoneStatus('Voice detected', 'ok');
+        setCaptureUi(true);
+        sendHealth({ speaking: true });
+      }
     } else if (result.state === 'end') {
       capture.speaking = false;
       setMicrophoneStatus('Microphone is active', 'ok');
       setCaptureUi(true);
       sendHealth({ speaking: false });
-    } else if (result.state === 'speech' || result.state === 'hangover' || result.state === 'rising') {
-      if (!capture.speaking && voiceDetection.shouldVoiceTrigger?.(samples)) {
-        capture.speaking = true;
-      }
+    } else if (energy.rms < (voiceDetection.config?.minRms || 0.003) && capture.speaking) {
+      // Soft fall-through when analyser lags behind the gate.
     }
     capture.voiceFrame = window.requestAnimationFrame(tick);
   };
@@ -1036,24 +1040,26 @@ async function stopCapture({ reason = 'manual' } = {}) {
   clearTimeout(capture.segmentTimer);
   if (capture.voiceFrame) window.cancelAnimationFrame(capture.voiceFrame);
   capture.stopPromise = (async () => {
-    await stopCaptureAndDrain(capture, () => setMicrophoneStatus('Not active', 'neutral'));
-    let serverEnded = true;
-    try {
-      await request(`/api/v1/audio/sessions/${encodeURIComponent(capture.conversationId)}/finish`, { method: 'POST' });
-    } catch (error) {
-      serverEnded = false;
-      showError($('#captureError'), `Capture stopped, but the server could not close this conversation: ${error.message}`);
-    }
+    // Release mic instantly; do not wait on remote STT uploads.
+    await stopCaptureAndDrain(
+      capture,
+      () => setMicrophoneStatus('Not active', 'neutral'),
+      { maxUploadWaitMs: STOP_UPLOAD_WAIT_MS },
+    );
     capture.session.status = 'ENDED';
     capture.session.endedAt = new Date();
+    // Local save first so Stop/close feels instant.
     await saveTranscriptArchive(true);
     if (state.view === 'transcripts') renderTranscriptArchive();
     state.capture = null;
     setMicrophoneStatus('Not active', 'neutral');
     $('#sessionTime').textContent = '00:00:00';
     $('#sessionStat').textContent = '00:00';
-    setCaptureUi(false, false, serverEnded);
+    setCaptureUi(false, false, true);
     sendHealth();
+    // Server finish in background — never block Stop / quit / sleep.
+    void request(`/api/v1/audio/sessions/${encodeURIComponent(capture.conversationId)}/finish`, { method: 'POST' })
+      .catch(() => undefined);
   })().finally(() => {
     if (state.capture === capture) capture.stopPromise = null;
   });
@@ -1092,8 +1098,10 @@ async function startCaptureSession() {
     audioContext = new AudioContext();
     await audioContext.resume();
     const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0;
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.05;
+    analyser.minDecibels = -90;
+    analyser.maxDecibels = -10;
     const source = audioContext.createMediaStreamSource(stream);
     const silent = audioContext.createGain();
     silent.gain.value = 0;
@@ -1144,8 +1152,9 @@ async function startCaptureSession() {
       latestPreviewText: '',
       livePartialEnglish: '',
       previewThrottle: null,
-      previewInFlight: false,
       previewSequence: 0,
+      previewAppliedSequence: 0,
+      spokeInSegment: false,
       uploadQueue: Promise.resolve(),
       inflightUploads: new Set(),
       activeUploads: 0,
