@@ -1,15 +1,15 @@
 export const voiceActivityConfig = {
-  minRms: 0.00035,
-  peakThreshold: 0.01,
-  snr: 1.25,
-  minSpeechRatio: 0.22,
+  minRms: 0.008,
+  peakThreshold: 0.04,
+  snr: 1.8,
+  minSpeechRatio: 0.28,
   minZcr: 0.012,
   maxZcr: 0.42,
-  startFrames: 1,
-  endFrames: 4,
-  silenceHangoverMs: 280,
-  maxSegmentMs: 1400,
-  minClipMs: 200,
+  startFrames: 3,
+  endFrames: 8,
+  silenceHangoverMs: 520,
+  maxSegmentMs: 4200,
+  minClipMs: 650,
   previewIntervalMs: 4500,
   livePreviewEnabled: false,
 } as const;
@@ -50,10 +50,11 @@ export function speechBandRatio(frequencyDb: Float32Array, sampleRate: number) {
 }
 
 export function createVoiceGate() {
-  let noiseRms = 0.0008;
+  let noiseRms = 0.004;
   let speaking = false;
   let voiced = 0;
   let silent = 0;
+  let silenceStartedAt: number | null = null;
 
   return {
     get speaking() {
@@ -63,30 +64,34 @@ export function createVoiceGate() {
       speaking = false;
       voiced = 0;
       silent = 0;
+      silenceStartedAt = null;
     },
-    observe(samples: Float32Array, frequencyDb: Float32Array, sampleRate: number) {
+    observe(samples: Float32Array, frequencyDb: Float32Array, sampleRate: number, timestampMs = Date.now()) {
       const energy = calculateAudioEnergy(samples);
       const zcr = zeroCrossingRate(samples);
       const ratio = speechBandRatio(frequencyDb, sampleRate);
-      if (!speaking) noiseRms = (noiseRms * 0.9) + (energy.rms * 0.1);
+      if (!speaking) noiseRms = (noiseRms * 0.92) + (energy.rms * 0.08);
       const rmsFloor = Math.max(voiceActivityConfig.minRms, noiseRms * voiceActivityConfig.snr);
       const strongEnough = energy.rms >= rmsFloor || energy.peak >= voiceActivityConfig.peakThreshold;
       const rumble = ratio < 0.15 && zcr < 0.006 && energy.peak < 0.05;
-      const voicedNow = strongEnough && !rumble;
+      const voicedNow = strongEnough && ratio >= voiceActivityConfig.minSpeechRatio && !rumble;
       if (voicedNow) {
         voiced += 1;
         silent = 0;
+        silenceStartedAt = null;
         if (!speaking && voiced >= voiceActivityConfig.startFrames) {
           speaking = true;
           return 'start' as const;
         }
-        return speaking ? 'speech' : 'rising';
+        return speaking ? 'speech' as const : 'rising' as const;
       }
       voiced = 0;
       if (speaking) {
+        if (silenceStartedAt === null) silenceStartedAt = timestampMs;
         silent += 1;
-        if (silent >= voiceActivityConfig.endFrames) {
+        if (silent >= voiceActivityConfig.endFrames && timestampMs - silenceStartedAt >= voiceActivityConfig.silenceHangoverMs) {
           speaking = false;
+          silenceStartedAt = null;
           return 'end' as const;
         }
         return 'hangover' as const;

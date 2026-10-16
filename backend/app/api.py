@@ -1259,7 +1259,7 @@ async def preview_audio_transcription(
     if language_hint:
         language_hint = normalize_supported_language(language_hint)
         if language_hint is None:
-            raise HTTPException(422, "Language hint must be English, Spanish, Hindi, or Urdu.")
+            raise HTTPException(422, "Language hint must be English or Spanish.")
 
     suffix = {"audio/webm": ".webm", "audio/ogg": ".ogg", "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/mp4": ".m4a", "audio/mpeg": ".mp3"}[content_type]
     provider = get_speech_provider(settings.speech_provider)
@@ -1341,7 +1341,7 @@ async def transcribe_audio(
     if language_hint:
         language_hint = normalize_supported_language(language_hint)
         if language_hint is None:
-            raise HTTPException(422, "Language hint must be English, Spanish, Hindi, or Urdu.")
+            raise HTTPException(422, "Language hint must be English or Spanish.")
 
     if conversation_id:
         conversation = _audio_conversation(db, conversation_id, store_id, actor)

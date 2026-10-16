@@ -26,15 +26,15 @@ class Settings(BaseSettings):
     speech_api_key: str = ""
     groq_api_key: str = ""
     speech_cloud_base_url: str = ""
-    # Groq free tier default (whisper-large-v3-turbo). For OpenAI paid use gpt-4o-mini-transcribe or whisper-1.
-    speech_cloud_model: str = "whisper-large-v3-turbo"
+    # Groq free tier: whisper-large-v3 (more accurate than turbo for store speech).
+    speech_cloud_model: str = "whisper-large-v3"
     whisper_model: str = "tiny"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
     whisper_beam_size: int = Field(default=1, ge=1, le=5)
     whisper_cpu_threads: int = Field(default=2, ge=1, le=8)
     whisper_num_workers: int = Field(default=1, ge=1, le=4)
-    whisper_translate_spanish: bool = False
+    whisper_translate_spanish: bool = True
     whisper_preview_enabled: bool = False
     whisper_warmup_on_start: bool = True
     pos_provider: str = "mock"

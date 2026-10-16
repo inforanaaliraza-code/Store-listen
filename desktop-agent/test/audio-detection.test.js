@@ -25,12 +25,13 @@ function spectrum(speechDb, noiseDb) {
   return values;
 }
 
-test('voice gate starts within a few frames and ends after a brief hangover', () => {
-  assert.ok(config.startFrames <= 2, 'speech start should require at most two frames');
-  assert.ok(config.endFrames <= 5, 'a few silent frames should be enough once the timed hangover expires');
-  assert.ok(config.silenceHangoverMs <= 320, 'silence hangover should stay under ~320ms for fast finals');
+test('voice gate requires sustained speech and a longer hangover for accurate clips', () => {
+  assert.ok(config.startFrames >= 2, 'ignore brief noise spikes');
+  assert.ok(config.endFrames >= 6, 'keep the phrase open through short pauses');
+  assert.ok(config.silenceHangoverMs >= 450, 'collect a full spoken phrase before cutting');
   assert.equal(config.livePreviewEnabled, false, 'live Whisper previews must stay off so finals own the CPU');
-  assert.ok(config.maxSegmentMs <= 1600, 'final speech clips should be finalized quickly');
+  assert.ok(config.maxSegmentMs >= 3500, 'clips need enough speech for accurate STT');
+  assert.ok(config.minClipMs >= 500, 'reject tiny silence clips that hallucinate thank you');
 
   const gate = createVoiceGate();
   const speech = tone(512, 0.08);
@@ -39,43 +40,43 @@ test('voice gate starts within a few frames and ends after a brief hangover', ()
   const hushSpectrum = spectrum(-90, -55);
 
   let started = false;
-  for (let frame = 0; frame < 6; frame += 1) {
+  for (let frame = 0; frame < 8; frame += 1) {
     if (gate.observe(speech, speechSpectrum, 48000).state === 'start') started = true;
   }
   assert.equal(started, true);
 
   let ended = false;
-  for (let frame = 0; frame < 12; frame += 1) {
+  for (let frame = 0; frame < 20; frame += 1) {
     const result = gate.observe(hush, hushSpectrum, 48000, frame * (1000 / 60));
     if (result.state === 'end') ended = true;
   }
   assert.equal(ended, false, 'short pauses should not end a spoken phrase');
-  for (let frame = 12; frame < 45; frame += 1) {
+  for (let frame = 20; frame < 80; frame += 1) {
     if (gate.observe(hush, hushSpectrum, 48000, frame * (1000 / 60)).state === 'end') ended = true;
   }
   assert.equal(ended, true);
 });
 
-test('quiet store-counter speech still opens the voice gate', () => {
+test('quiet but real store-counter speech still opens the voice gate', () => {
   const gate = createVoiceGate();
-  const quiet = tone(512, 0.02, 13);
-  const mixed = spectrum(-28, -60);
+  const quiet = tone(512, 0.035, 13);
+  const mixed = spectrum(-22, -60);
   let started = false;
-  for (let frame = 0; frame < 8; frame += 1) {
+  for (let frame = 0; frame < 12; frame += 1) {
     if (gate.observe(quiet, mixed, 48000).state === 'start') started = true;
   }
   assert.equal(started, true);
 });
 
-test('moderate human speech should trigger before the signal becomes strong enough to sound clipped', () => {
-  const samples = tone(1024, 0.04, 11);
+test('moderate human speech should trigger the energy gate', () => {
+  const samples = tone(1024, 0.05, 11);
   for (let index = 0; index < samples.length; index += 1) {
-    if (index % 17 === 0) samples[index] += 0.015;
+    if (index % 17 === 0) samples[index] += 0.02;
   }
 
   const energy = calculateAudioEnergy(samples);
-  assert.ok(energy.rms > 0.001, 'moderate voice should exceed a minimal RMS floor');
-  assert.ok(energy.peak > 0.03, 'peak amplitude should reflect a detectable speaking voice');
+  assert.ok(energy.rms > 0.008, 'moderate voice should exceed the store RMS floor');
+  assert.ok(energy.peak > 0.04, 'peak amplitude should reflect a detectable speaking voice');
   assert.equal(shouldVoiceTrigger(samples), true);
 });
 

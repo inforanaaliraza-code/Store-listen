@@ -101,10 +101,11 @@ def test_whisper_rejects_languages_outside_english_and_spanish(monkeypatch, tmp_
         WhisperSpeechProvider().transcribe_file(tmp_path / "french.wav")
 
 
-def test_supported_languages_include_hindi_urdu_and_arabic():
-    assert normalize_supported_language("hi-IN") == "hi"
-    assert normalize_supported_language("ur-PK") == "ur"
-    assert normalize_supported_language("ar-SA") == "ar"
+def test_supported_languages_are_english_and_spanish_only():
+    assert normalize_supported_language("en-US") == "en"
+    assert normalize_supported_language("es-MX") == "es"
+    assert normalize_supported_language("hi-IN") is None
+    assert normalize_supported_language("ur-PK") is None
     assert normalize_supported_language("fr-FR") is None
 
 
@@ -133,11 +134,11 @@ def test_audio_preview_broadcasts_partial_without_saving_audio_or_transcript(mon
     from app import api as api_module
     from app.config import settings
 
-    class HindiSpeechProvider:
+    class SpanishSpeechProvider:
         name = "test-whisper"
 
         def transcribe_file(self, audio_path: str, language_hint: str | None = None) -> SpeechResult:
-            return SpeechResult("नमस्ते, मैं यहाँ मदद के लिए हूँ", "hi", "नमस्ते, मैं यहाँ मदद के लिए हूँ", 0.91, False)
+            return SpeechResult("Hola, necesito un cargador", "es", "Hello, I need a charger", 0.91, False)
 
     events = []
 
@@ -145,7 +146,7 @@ def test_audio_preview_broadcasts_partial_without_saving_audio_or_transcript(mon
         events.append((room, event))
 
     monkeypatch.setattr(settings, "whisper_preview_enabled", True)
-    monkeypatch.setattr(api_module, "get_speech_provider", lambda _name: HindiSpeechProvider())
+    monkeypatch.setattr(api_module, "get_speech_provider", lambda _name: SpanishSpeechProvider())
     monkeypatch.setattr(api_module.hub, "publish", capture_event)
     client.cookies.clear()
     login = client.post("/api/v1/auth/login", json={"email": "admin@storelisten.demo", "password": "StoreListen!2026"})
@@ -162,7 +163,8 @@ def test_audio_preview_broadcasts_partial_without_saving_audio_or_transcript(mon
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["segment"]["originalText"].startswith("नमस्ते")
+    assert response.json()["segment"]["originalText"].startswith("Hola")
+    assert response.json()["segment"]["translatedText"] == "Hello, I need a charger"
     assert response.json()["segment"]["isFinal"] is False
     assert response.json()["segment"]["captureSequence"] == 2
     assert response.json()["segment"]["previewSequence"] == 3
@@ -200,9 +202,10 @@ def test_whisper_uses_configured_low_latency_beam_size(monkeypatch, tmp_path):
     assert calls[0]["beam_size"] == 1
     assert calls[0]["best_of"] == 1
     assert calls[0]["temperature"] == 0.0
-    assert calls[0]["vad_filter"] is False
+    assert calls[0]["vad_filter"] is True
     assert calls[0]["without_timestamps"] is True
     assert calls[0]["word_timestamps"] is False
+    assert calls[0]["no_speech_threshold"] == 0.65
 
 
 def test_whisper_skips_second_spanish_translation_pass_by_default(monkeypatch, tmp_path):

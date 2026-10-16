@@ -379,12 +379,12 @@ function createTranscriptItem(segment, capturedAt, number) {
   if (segment.translatedText && segment.translatedText !== segment.originalText) {
     const translation = document.createElement('p');
     translation.className = 'transcript-translation';
-    translation.textContent = segment.translatedText;
+    translation.textContent = `EN: ${segment.translatedText}`;
     item.append(translation);
   }
   const language = document.createElement('span');
   language.className = 'transcript-language';
-  language.textContent = segment.language || 'und';
+  language.textContent = (segment.language || 'und').toUpperCase();
   item.append(language);
   return item;
 }
@@ -532,36 +532,30 @@ function renderLiveTranscript(session, partialText = '', isTranscribing = false)
   const list = $('#transcriptList');
   const empty = $('#emptyTranscript');
   if (empty) empty.remove();
-  let transcript = $('#liveTranscriptCopy');
-  if (!transcript) {
-    transcript = document.createElement('article');
-    transcript.className = 'live-transcript-copy';
-    transcript.id = 'liveTranscriptCopy';
-    const original = document.createElement('p');
-    original.className = 'live-transcript-original';
-    original.id = 'liveTranscriptText';
-    const partial = document.createElement('span');
-    partial.className = 'live-transcript-current';
-    const partialWords = document.createElement('span');
-    partialWords.id = 'liveTranscriptPartial';
-    const dots = document.createElement('span');
-    dots.className = 'transcript-typing-dots';
-    dots.id = 'liveTranscriptTyping';
-    dots.setAttribute('role', 'status');
-    dots.setAttribute('aria-label', 'Transcribing speech');
-    for (let index = 0; index < 5; index += 1) dots.append(document.createElement('i'));
-    partial.append(partialWords, dots);
-    transcript.append(original, partial);
-    list.append(transcript);
+  let linesHost = $('#liveTranscriptLines');
+  if (!linesHost) {
+    linesHost = document.createElement('div');
+    linesHost.className = 'live-transcript-lines';
+    linesHost.id = 'liveTranscriptLines';
+    list.replaceChildren(linesHost);
   }
-  $('#liveTranscriptText').textContent = session.entries
-    .map(({ segment: entrySegment }) => entrySegment.originalText || '')
-    .filter(Boolean)
-    .join(' ');
-  const partial = $('#liveTranscriptPartial');
-  partial.textContent = partialText ? ` ${partialText}` : '';
-  partial.parentElement.hidden = !partialText && !isTranscribing;
-  $('#liveTranscriptTyping').hidden = !isTranscribing;
+  const fragment = document.createDocumentFragment();
+  session.entries.forEach((entry) => {
+    fragment.append(createTranscriptItem(entry.segment, entry.capturedAt, entry.number));
+  });
+  if (partialText || isTranscribing) {
+    const pending = document.createElement('article');
+    pending.className = 'transcript-item transcript-pending';
+    const meta = document.createElement('div');
+    meta.className = 'transcript-meta';
+    meta.textContent = isTranscribing ? 'Transcribing…' : 'Listening…';
+    const text = document.createElement('p');
+    text.className = 'transcript-original live-transcript-current';
+    text.textContent = partialText || 'Capturing speech…';
+    pending.append(meta, text);
+    fragment.append(pending);
+  }
+  linesHost.replaceChildren(fragment);
   list.scrollTop = list.scrollHeight;
 }
 
@@ -580,8 +574,9 @@ function addTranscript(segment) {
   $('#archiveTranscriptCount').textContent = String(state.sessions.length);
   $('#feedCount').textContent = `LIVE · ${state.transcriptCount}`;
   const timestamp = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date());
+  const lang = (segment.language || '').toUpperCase();
   $('#lastTranscript').textContent = Number.isFinite(segment.transcriptionMs)
-    ? `${timestamp} · STT ${(segment.transcriptionMs / 1000).toFixed(1)}s`
+    ? `${timestamp} · ${lang || 'STT'} ${(segment.transcriptionMs / 1000).toFixed(1)}s`
     : timestamp;
   $('#deliveryStat').innerHTML = '<i class="stat-dot"></i>Live';
   if (state.view === 'transcripts') renderTranscriptArchive();
@@ -649,7 +644,9 @@ async function uploadSegment(capture, blob, sequence, offset, duration) {
     capture.latestPreviewText = '';
     renderLiveTranscript(capture.session);
     if (response.analysis_status === 'unsupported_language') {
-      showError($('#captureError'), 'Speech was detected, but this setup supports English, Spanish, Hindi, and Urdu.');
+      showError($('#captureError'), 'Only English and Spanish are transcribed. Other languages are ignored.');
+    } else if (response.analysis_status === 'no_speech') {
+      // Quiet / hallucinated clips are dropped on purpose — keep listening.
     }
   }
   if (response.segment) showError($('#captureError'), '');
@@ -889,9 +886,9 @@ async function startCaptureSession() {
     liveEmpty.className = 'empty-transcript';
     liveEmpty.id = 'emptyTranscript';
     const liveTitle = document.createElement('strong');
-    liveTitle.textContent = 'Listening for the current conversation';
+    liveTitle.textContent = 'Listening for English or Spanish';
     const liveNote = document.createElement('span');
-    liveNote.textContent = 'Newest recognized speech appears at the top.';
+    liveNote.textContent = 'Each phrase appears as its own line. Spanish lines include an English translation for staff.';
     liveEmpty.append(liveTitle, liveNote);
     $('#transcriptList').replaceChildren(liveEmpty);
     $('#navTranscriptCount').textContent = String(state.sessions.length);

@@ -441,7 +441,7 @@ export default function LivePage() {
     if (!segment) {
       setAnalysisNotice(result.analysis_status === 'no_speech'
         ? 'No speech detected in this clip; listening continues.'
-        : `Ignored unsupported language${result.detected_language ? ` (${result.detected_language})` : ''}; English, Spanish, Hindi, and Urdu are transcribed.`);
+        : `Ignored unsupported language${result.detected_language ? ` (${result.detected_language})` : ''}; only English and Spanish are transcribed.`);
       setCaptureStatus(`Recording · ${result.speech_provider || 'speech'} ready`);
       return;
     }
@@ -753,12 +753,27 @@ export default function LivePage() {
         </header>
         <div className="monitor-transcript" role="log" aria-live="polite" aria-relevant="additions text">
           {lines.length || partial ? (
-            <p className="monitor-conversation-copy">
-              {lines.map((line) => line.original.trim()).filter(Boolean).join(' ')}
-              {lines.length && partial ? ' ' : null}
-              {partial ? <><span className="monitor-current-phrase">{partial}</span><LiveTypingDots /></> : null}
-            </p>
-          ) : <div className="monitor-empty"><strong>{conversationStatus === 'ENDED' ? 'Session ended' : connected ? 'Waiting for a live conversation' : 'Store feed is reconnecting'}</strong><span>{conversationStatus === 'ENDED' ? 'The transcript is saved in conversation history.' : connected ? 'New transcript lines will appear here as the desktop recorder sends them.' : 'The monitor will resume automatically when the store connection returns.'}</span></div>}
+            <div className="monitor-conversation-lines">
+              {lines.map((line) => (
+                <article key={line.id} className="monitor-line">
+                  <header className="monitor-line-meta">
+                    <span>{line.speaker}</span>
+                    <span>{(line.language || 'en').toUpperCase()}</span>
+                  </header>
+                  <p className="monitor-line-original">{line.original}</p>
+                  {line.translated && line.translated !== line.original ? (
+                    <p className="monitor-line-translation">EN: {line.translated}</p>
+                  ) : null}
+                </article>
+              ))}
+              {partial ? (
+                <p className="monitor-conversation-copy">
+                  <span className="monitor-current-phrase">{partial}</span>
+                  <LiveTypingDots />
+                </p>
+              ) : null}
+            </div>
+          ) : <div className="monitor-empty"><strong>{conversationStatus === 'ENDED' ? 'Session ended' : connected ? 'Waiting for a live conversation' : 'Store feed is reconnecting'}</strong><span>{conversationStatus === 'ENDED' ? 'The transcript is saved in conversation history.' : connected ? 'English and Spanish lines appear here; Spanish includes an English translation for staff.' : 'The monitor will resume automatically when the store connection returns.'}</span></div>}
         </div>
         <footer className="monitor-card-footer">
           <span><i className={connected ? 'is-online' : ''} />{connected ? 'Live store feed' : 'Feed unavailable'}</span>

@@ -46,7 +46,9 @@ services:
       - key: SPEECH_PROVIDER
         value: auto
       - key: SPEECH_CLOUD_MODEL
-        value: whisper-large-v3-turbo
+        value: whisper-large-v3
+      - key: WHISPER_TRANSLATE_SPANISH
+        value: "true"
       - key: WHISPER_MODEL
         value: tiny
       - key: WHISPER_DEVICE

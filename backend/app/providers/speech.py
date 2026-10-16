@@ -8,6 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import settings
+from app.providers.speech_quality import (
+    SUPPORTED_LANGUAGES,
+    is_hallucinated_transcript,
+    looks_like_spanish,
+    normalize_language,
+    sanitize_transcript,
+)
 
 logger = logging.getLogger("storelisten.speech")
 
@@ -40,22 +47,24 @@ class NoSpeechDetected(ValueError):
 class UnsupportedLanguageDetected(ValueError):
     def __init__(self, language: str):
         self.language = language
-        super().__init__(f"Only English, Spanish, Hindi, Urdu, and Arabic speech is supported; detected {language}.")
-
-
-SUPPORTED_LANGUAGES = frozenset({"en", "es", "hi", "ur", "ar"})
+        super().__init__(f"Only English and Spanish speech is supported; detected {language}.")
 
 
 def normalize_supported_language(language: str | None) -> str | None:
-    if not language:
-        return None
-    code = language.lower().replace("_", "-").split("-")[0]
-    return code if code in SUPPORTED_LANGUAGES else None
+    return normalize_language(language)
 
 
 GROQ_OPENAI_BASE_URL = "https://api.groq.com/openai/v1"
-GROQ_DEFAULT_MODEL = "whisper-large-v3-turbo"
+GROQ_DEFAULT_MODEL = "whisper-large-v3"
+GROQ_TRANSLATE_MODEL = "whisper-large-v3"
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini-transcribe"
+
+# Bias Whisper away from YouTube-style filler on quiet store clips.
+_STT_PROMPT = (
+    "Retail store conversation between a customer and an employee. "
+    "Transcribe only clear spoken English or Spanish words. "
+    "Do not invent phrases like thank you, thanks for watching, or subscribe."
+)
 
 
 def resolve_speech_api_key() -> str:
@@ -71,10 +80,12 @@ def resolve_speech_cloud_config(requested: str | None = None) -> dict[str, str]:
     custom_base = (settings.speech_cloud_base_url or "").strip()
     configured_model = (settings.speech_cloud_model or "").strip()
 
-    # auto prefers free Groq when GROQ_API_KEY is set; explicit openai forces OpenAI.
     use_groq = name == "groq" or (name in {"auto", "cloud"} and bool(groq_key))
     if use_groq and groq_key:
         model = configured_model if configured_model.startswith("whisper-large") else GROQ_DEFAULT_MODEL
+        # Prefer full v3 over turbo for store accuracy (fewer hallucinations).
+        if model == "whisper-large-v3-turbo":
+            model = GROQ_DEFAULT_MODEL
         return {
             "label": "groq",
             "api_key": groq_key,
@@ -103,6 +114,26 @@ def resolve_speech_provider_name(requested: str | None = None) -> str:
     if name == "auto":
         return "cloud" if resolve_speech_api_key() else "whisper"
     return name
+
+
+def _finalize_transcript(original: str, language: str | None, hint: str | None) -> tuple[str, str]:
+    text = sanitize_transcript(original)
+    if not text or is_hallucinated_transcript(text):
+        raise NoSpeechDetected("No clear English or Spanish speech was detected in this audio clip.")
+
+    raw = (language or "").lower().replace("_", "-").split("-")[0] if language else None
+    if raw and raw not in SUPPORTED_LANGUAGES and raw not in {"und", "auto", ""}:
+        # Model explicitly detected a non-store language — reject unless the text is clearly Spanish.
+        if looks_like_spanish(text):
+            return text, "es"
+        raise UnsupportedLanguageDetected(raw)
+
+    detected = normalize_supported_language(language) or hint
+    if detected is None:
+        detected = "es" if looks_like_spanish(text) else "en"
+    if detected not in SUPPORTED_LANGUAGES:
+        raise UnsupportedLanguageDetected(detected)
+    return text, detected
 
 
 class MockSpeechProvider(SpeechProvider):
@@ -176,13 +207,14 @@ class WhisperSpeechProvider(SpeechProvider):
             "beam_size": settings.whisper_beam_size,
             "best_of": 1,
             "temperature": 0.0,
-            "vad_filter": False,
+            "vad_filter": True,
             "without_timestamps": True,
             "condition_on_previous_text": False,
             "word_timestamps": False,
-            "compression_ratio_threshold": 2.4,
-            "no_speech_threshold": 0.55,
+            "compression_ratio_threshold": 2.2,
+            "no_speech_threshold": 0.65,
             "patience": 0.8,
+            "initial_prompt": _STT_PROMPT,
         }
 
     def transcribe(self, audio_chunk: bytes, language_hint: str | None = None) -> SpeechResult:
@@ -206,26 +238,26 @@ class WhisperSpeechProvider(SpeechProvider):
         segments, info = model.transcribe(str(audio_path), **self._transcribe_kwargs(language_hint))
         segment_list = list(segments)
         original = " ".join(segment.text.strip() for segment in segment_list).strip()
-        if not original:
-            raise NoSpeechDetected("No speech was detected in this audio clip.")
-        confidence = sum(segment.avg_logprob for segment in segment_list) / len(segment_list)
+        original, language = _finalize_transcript(original, getattr(info, "language", None), language_hint)
+        confidence = sum(segment.avg_logprob for segment in segment_list) / max(len(segment_list), 1)
         confidence = max(0.0, min(1.0, 2.71828**confidence))
-        language = normalize_supported_language(info.language)
-        if language is None:
-            raise UnsupportedLanguageDetected(info.language or "und")
         translated = original
         if language == "es" and settings.whisper_translate_spanish:
             translations, _ = model.transcribe(
                 str(audio_path),
                 task="translate",
-                **self._transcribe_kwargs(language),
+                **{**self._transcribe_kwargs("en"), "language": "en"},
             )
-            translated = " ".join(segment.text.strip() for segment in translations).strip() or original
+            translated = sanitize_transcript(
+                " ".join(segment.text.strip() for segment in translations)
+            ) or original
+            if is_hallucinated_transcript(translated):
+                translated = original
         return SpeechResult(original, language, translated, confidence, True, "spk-unassigned")
 
 
 class CloudSpeechProvider(SpeechProvider):
-    """Cloud transcription via Groq (free) or OpenAI — typically 1–3s vs minutes on free CPUs."""
+    """Cloud transcription via Groq (free) or OpenAI — EN/ES only with Spanish→English."""
 
     name = "cloud"
 
@@ -243,64 +275,126 @@ class CloudSpeechProvider(SpeechProvider):
             except FileNotFoundError:
                 pass
 
-    def transcribe_file(self, audio_path: str | Path, language_hint: str | None = None) -> SpeechResult:
-        if language_hint and not normalize_supported_language(language_hint):
-            raise UnsupportedLanguageDetected(language_hint)
-        config = resolve_speech_cloud_config()
-        api_key = config["api_key"]
-        if not api_key:
-            raise RuntimeError(
-                "GROQ_API_KEY (free) or SPEECH_API_KEY / AI_API_KEY is required for cloud speech transcription."
-            )
-        try:
-            from openai import OpenAI
-        except ImportError as exc:
-            raise RuntimeError("Install backend requirements to enable cloud speech.") from exc
+    def _openai_client(self, config: dict[str, str]):
+        from openai import OpenAI
 
-        client_kwargs: dict = {"api_key": api_key}
+        client_kwargs: dict = {"api_key": config["api_key"]}
         if config["base_url"]:
             client_kwargs["base_url"] = config["base_url"]
-        client = OpenAI(**client_kwargs)
-        model = config["model"]
-        hint = normalize_supported_language(language_hint)
-        path = Path(audio_path)
+        return OpenAI(**client_kwargs)
+
+    def _transcribe_once(self, client, model: str, path: Path, *, language: str | None) -> tuple[str, str | None]:
         filename = path.name or f"audio{path.suffix or '.webm'}"
         with path.open("rb") as audio_file:
             kwargs: dict = {
                 "model": model,
                 "file": (filename, audio_file),
+                "prompt": _STT_PROMPT,
+                "temperature": 0,
             }
             if "whisper" in model:
                 kwargs["response_format"] = "verbose_json"
             else:
                 kwargs["response_format"] = "json"
-            if hint:
-                kwargs["language"] = hint
+            if language in {"en", "es"}:
+                kwargs["language"] = language
             try:
                 result = client.audio.transcriptions.create(**kwargs)
             except Exception:
-                # Some models reject language/response_format; retry with bare payload.
                 audio_file.seek(0)
-                kwargs = {"model": model, "file": (filename, audio_file)}
-                result = client.audio.transcriptions.create(**kwargs)
-        original = (getattr(result, "text", None) or str(result or "")).strip()
-        language = normalize_supported_language(getattr(result, "language", None) or hint)
+                bare = {"model": model, "file": (filename, audio_file), "temperature": 0}
+                if language in {"en", "es"}:
+                    bare["language"] = language
+                result = client.audio.transcriptions.create(**bare)
+        text = sanitize_transcript(getattr(result, "text", None) or "")
+        detected = normalize_supported_language(getattr(result, "language", None) or language)
+        return text, detected
 
-        if not original:
-            raise NoSpeechDetected("No speech was detected in this audio clip.")
-        if language is None:
-            language = "en"
-        if language not in SUPPORTED_LANGUAGES:
-            raise UnsupportedLanguageDetected(language)
+    def _translate_to_english(self, client, config: dict[str, str], path: Path, spanish_text: str) -> str:
+        """Produce English for staff. Prefer Whisper translate; fall back to chat."""
+        filename = path.name or f"audio{path.suffix or '.webm'}"
+        translate_model = GROQ_TRANSLATE_MODEL if config["label"] == "groq" else config["model"]
+        try:
+            with path.open("rb") as audio_file:
+                result = client.audio.translations.create(
+                    model=translate_model if "whisper" in translate_model else "whisper-1",
+                    file=(filename, audio_file),
+                    response_format="json",
+                    temperature=0,
+                )
+            translated = sanitize_transcript(getattr(result, "text", None) or "")
+            if translated and not is_hallucinated_transcript(translated):
+                return translated
+        except Exception:
+            logger.info("Audio translate endpoint unavailable; falling back to text translation", exc_info=True)
+
+        # Free Groq chat translate for Spanish text when audio-translate is unavailable.
+        try:
+            chat_model = "llama-3.1-8b-instant" if config["label"] == "groq" else "gpt-4o-mini"
+            completion = client.chat.completions.create(
+                model=chat_model,
+                temperature=0,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Translate the customer's Spanish retail-store speech into clear, concise English. "
+                            "Return only the English translation, no quotes or commentary."
+                        ),
+                    },
+                    {"role": "user", "content": spanish_text},
+                ],
+            )
+            translated = sanitize_transcript(completion.choices[0].message.content or "")
+            if translated and not is_hallucinated_transcript(translated):
+                return translated
+        except Exception:
+            logger.warning("Text translation fallback failed", exc_info=True)
+        return spanish_text
+
+    def transcribe_file(self, audio_path: str | Path, language_hint: str | None = None) -> SpeechResult:
+        if language_hint and not normalize_supported_language(language_hint):
+            raise UnsupportedLanguageDetected(language_hint)
+        config = resolve_speech_cloud_config()
+        if not config["api_key"]:
+            raise RuntimeError(
+                "GROQ_API_KEY (free) or SPEECH_API_KEY / AI_API_KEY is required for cloud speech transcription."
+            )
+        try:
+            from openai import OpenAI  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError("Install backend requirements to enable cloud speech.") from exc
+
+        client = self._openai_client(config)
+        model = config["model"]
+        hint = normalize_supported_language(language_hint)
+        path = Path(audio_path)
+
+        # Auto-detect first unless the operator forced EN/ES.
+        original, detected = self._transcribe_once(client, model, path, language=hint)
+        if not original or is_hallucinated_transcript(original):
+            # Retry once with the opposite language bias when auto result is junk.
+            retry_lang = "es" if hint != "es" else "en"
+            if hint is None:
+                alt_text, alt_lang = self._transcribe_once(client, model, path, language=retry_lang)
+                if alt_text and not is_hallucinated_transcript(alt_text):
+                    original, detected = alt_text, alt_lang or retry_lang
+
+        original, language = _finalize_transcript(original, detected, hint)
+        translated = original
+        if language == "es" and settings.whisper_translate_spanish:
+            translated = self._translate_to_english(client, config, path, original)
+
         self.name = config["label"] or "cloud"
         logger.info(
-            "Cloud STT complete backend=%s model=%s language=%s chars=%s",
+            "Cloud STT complete backend=%s model=%s language=%s chars=%s translated=%s",
             self.name,
             model,
             language,
             len(original),
+            language == "es" and translated != original,
         )
-        return SpeechResult(original, language, original, 0.92, True, "spk-unassigned")
+        return SpeechResult(original, language, translated, 0.92, True, "spk-unassigned")
 
 
 _speech_provider_cache: dict[str, SpeechProvider] = {}
