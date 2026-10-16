@@ -5,12 +5,13 @@ const deviceHealth = window.StoreListenDeviceHealth;
 const { isDeviceSessionExpired } = window.StoreListenDeviceConfig;
 const { stopCaptureAndDrain } = window.StoreListenRecordingLifecycle;
 const { formatUserError } = window.StoreListenErrorMessages;
-const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 1100;
-const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 280;
-const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 700, 500);
+const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 750;
+const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 220;
+const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 450, 350);
 const LIVE_PREVIEW_ENABLED = voiceDetection.config?.livePreviewEnabled !== false;
-const RECORDER_TIMESLICE_MS = 200;
-const MAX_PARALLEL_UPLOADS = 4;
+const RECORDER_TIMESLICE_MS = 120;
+const MAX_PARALLEL_UPLOADS = 6;
+const TYPEWRITER_WORD_MS = 42;
 const setupScreen = $('#setupScreen');
 const appScreen = $('#appScreen');
 const state = {
@@ -502,11 +503,111 @@ function ensureConversationHost() {
   return linesHost;
 }
 
+function getOrCreateLiveBody() {
+  const host = ensureConversationHost();
+  let body = host.querySelector('.transcript-paragraph:last-of-type .transcript-paragraph-body');
+  if (body) return body;
+  const item = document.createElement('article');
+  item.className = 'transcript-paragraph';
+  item.innerHTML = `<header class="transcript-paragraph-meta"><span class="transcript-paragraph-label">Paragraph 01</span><time class="transcript-time">${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date())}</time></header><p class="transcript-paragraph-body"></p>`;
+  host.append(item);
+  return item.querySelector('.transcript-paragraph-body');
+}
+
+function getOrCreateTypingTrail(body) {
+  let trail = $('#liveTypingTrail');
+  if (!trail) {
+    trail = document.createElement('span');
+    trail.id = 'liveTypingTrail';
+    trail.className = 'live-typing-trail';
+    if ([...body.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim())) {
+      body.append(document.createTextNode(' '));
+    }
+    body.append(trail);
+  } else if (trail.parentElement !== body) {
+    if (body.textContent?.trim()) body.append(document.createTextNode(' '));
+    body.append(trail);
+  }
+  return trail;
+}
+
+function renderTypewriterTrail() {
+  const capture = state.capture;
+  if (!capture?.requested) return;
+  const body = getOrCreateLiveBody();
+  const trail = getOrCreateTypingTrail(body);
+  const words = String(capture.typewriterDisplayed || '').split(/\s+/).filter(Boolean);
+  const wordsHtml = words.length
+    ? `<span class="live-words">${words.map((word, index) => (
+      index === words.length - 1
+        ? `<span class="word-pop">${word}</span>`
+        : word
+    )).join(' ')}</span> `
+    : '';
+  trail.innerHTML = `${wordsHtml}${typingDotsMarkup()}`;
+  const list = $('#transcriptList');
+  if (list) list.scrollTop = list.scrollHeight;
+}
+
+function stopTypewriter() {
+  const capture = state.capture;
+  if (!capture) return;
+  if (capture.typewriterTimer) {
+    window.clearTimeout(capture.typewriterTimer);
+    capture.typewriterTimer = null;
+  }
+}
+
+function pumpTypewriter() {
+  const capture = state.capture;
+  if (!capture?.requested) return;
+  if (!capture.typewriterQueue?.length) {
+    capture.typewriterTimer = null;
+    renderTypewriterTrail();
+    return;
+  }
+  const next = capture.typewriterQueue.shift();
+  capture.typewriterDisplayed = capture.typewriterDisplayed
+    ? `${capture.typewriterDisplayed} ${next}`
+    : next;
+  renderTypewriterTrail();
+  capture.typewriterTimer = window.setTimeout(pumpTypewriter, TYPEWRITER_WORD_MS);
+}
+
+function enqueueTypewriterText(text) {
+  const capture = state.capture;
+  if (!capture?.requested) return;
+  const incoming = String(text || '').trim();
+  if (!incoming) {
+    showListeningDots();
+    return;
+  }
+  const shown = String(capture.typewriterDisplayed || '').trim();
+  let remainder = incoming;
+  if (shown) {
+    if (incoming.toLowerCase().startsWith(shown.toLowerCase())) {
+      remainder = incoming.slice(shown.length).trim();
+    } else if (shown.toLowerCase().includes(incoming.toLowerCase())) {
+      remainder = '';
+    }
+  }
+  const words = remainder.split(/\s+/).filter(Boolean);
+  if (!words.length) {
+    renderTypewriterTrail();
+    return;
+  }
+  capture.typewriterQueue = [...(capture.typewriterQueue || []), ...words];
+  if (!capture.typewriterTimer) pumpTypewriter();
+}
+
 function clearLivePartial() {
+  stopTypewriter();
   $('#liveTypingTrail')?.remove();
   if (state.capture) {
     state.capture.latestPreviewText = '';
     state.capture.livePartialEnglish = '';
+    state.capture.typewriterDisplayed = '';
+    state.capture.typewriterQueue = [];
   }
 }
 
@@ -527,75 +628,27 @@ function showLivePartial(segment) {
     state.capture.latestPreviewText = original;
     state.capture.livePartialEnglish = english;
   }
-  const host = ensureConversationHost();
-  let body = host.querySelector('.transcript-paragraph:last-of-type .transcript-paragraph-body');
-  if (!body) {
-    const item = document.createElement('article');
-    item.className = 'transcript-paragraph';
-    item.innerHTML = `<header class="transcript-paragraph-meta"><span class="transcript-paragraph-label">Paragraph 01</span><time class="transcript-time">${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date())}</time></header><p class="transcript-paragraph-body"></p>`;
-    host.append(item);
-    body = item.querySelector('.transcript-paragraph-body');
-  }
-  let trail = $('#liveTypingTrail');
-  if (!trail) {
-    trail = document.createElement('span');
-    trail.id = 'liveTypingTrail';
-    trail.className = 'live-typing-trail';
-    body.append(document.createTextNode(body.textContent?.trim() ? ' ' : ''));
-    body.append(trail);
-  } else if (trail.parentElement !== body) {
-    body.append(document.createTextNode(body.textContent?.trim() ? ' ' : ''));
-    body.append(trail);
-  }
-  const finalized = (body.childNodes[0]?.nodeType === Node.TEXT_NODE
-    ? body.childNodes[0].textContent
-    : [...body.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join('')).trim();
-  // Prefer appending only the newest words that are not already finalized.
-  let liveWords = original;
-  if (finalized && original.toLowerCase().startsWith(finalized.toLowerCase())) {
-    liveWords = original.slice(finalized.length).trim();
-  }
-  trail.innerHTML = `${liveWords ? `<span class="live-words">${liveWords}</span> ` : ''}${typingDotsMarkup()}`;
+  enqueueTypewriterText(original);
+  const body = getOrCreateLiveBody();
   const paragraph = body.closest('.transcript-paragraph');
-  let en = paragraph?.querySelector('.transcript-paragraph-en');
-  if (spanish) {
+  if (spanish && paragraph) {
+    let en = paragraph.querySelector('.transcript-paragraph-en');
     if (!en) {
       en = document.createElement('p');
       en.className = 'transcript-paragraph-en';
       en.innerHTML = '<span class="transcript-en-tag">EN</span> <span class="live-en-text"></span>';
       paragraph.append(en);
     }
-    const enText = en.querySelector('.live-en-text') || en;
-    if (en.querySelector('.live-en-text')) en.querySelector('.live-en-text').textContent = english || 'Translating…';
-    else en.lastChild.textContent = ` ${english || 'Translating…'}`;
+    const enText = en.querySelector('.live-en-text');
+    if (enText) enText.textContent = english || 'Translating…';
   }
-  const list = $('#transcriptList');
-  if (list) list.scrollTop = list.scrollHeight;
 }
 
 function showListeningDots() {
   if (!state.capture?.requested) return;
-  const host = ensureConversationHost();
-  let body = host.querySelector('.transcript-paragraph:last-of-type .transcript-paragraph-body');
-  if (!body) {
-    const item = document.createElement('article');
-    item.className = 'transcript-paragraph';
-    item.innerHTML = `<header class="transcript-paragraph-meta"><span class="transcript-paragraph-label">Paragraph 01</span><time class="transcript-time">${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date())}</time></header><p class="transcript-paragraph-body"></p>`;
-    host.append(item);
-    body = item.querySelector('.transcript-paragraph-body');
-  }
-  let trail = $('#liveTypingTrail');
-  if (!trail) {
-    trail = document.createElement('span');
-    trail.id = 'liveTypingTrail';
-    trail.className = 'live-typing-trail';
-    if (body.textContent?.trim()) body.append(document.createTextNode(' '));
-    body.append(trail);
-  }
-  if (!trail.querySelector('.typing-dots')) {
-    const words = trail.querySelector('.live-words')?.outerHTML || '';
-    trail.innerHTML = `${words ? `${words} ` : ''}${typingDotsMarkup()}`;
-  }
+  const body = getOrCreateLiveBody();
+  getOrCreateTypingTrail(body);
+  renderTypewriterTrail();
 }
 
 function captureDuration(session) {
@@ -815,10 +868,15 @@ function addTranscript(segment) {
     capturedAt,
   };
   session.entries.push(entry);
+  const pendingLive = state.capture?.typewriterDisplayed || state.capture?.latestPreviewText || '';
   clearLivePartial();
   saveTranscriptArchive();
   renderLiveTranscript(session);
-  if (state.capture?.requested && (state.capture.speaking || state.capture.inflightUploads?.size)) {
+  if (state.capture?.requested) {
+    // Keep the fast typing feel even after a final lands.
+    if (pendingLive && !String(segment.originalText || '').toLowerCase().includes(pendingLive.toLowerCase().slice(0, 12))) {
+      enqueueTypewriterText(pendingLive);
+    }
     showListeningDots();
   }
   state.transcriptCount += 1;
@@ -989,11 +1047,10 @@ function beginRecorder(capture) {
       const sequence = ++capture.sequence;
       enqueueUpload(capture, blob, sequence, offset, duration);
     }
-    // Stay armed: if still speaking, continue immediately; otherwise wait for the next voice start.
-    if (capture.requested && capture.speaking) beginRecorder(capture);
-    else if (capture.requested) {
+    // Continuous capture while LIVE — do not wait for the next VAD start.
+    if (capture.requested) {
       setMicrophoneStatus('Microphone is active', 'ok');
-      showListeningDots();
+      beginRecorder(capture);
     }
   };
   recorder.start(RECORDER_TIMESLICE_MS);
@@ -1006,11 +1063,15 @@ function monitorVoice(capture) {
   const samples = new Float32Array(capture.analyser.fftSize);
   const spectrum = new Float32Array(capture.analyser.frequencyBinCount);
   const gate = voiceDetection.createVoiceGate ? voiceDetection.createVoiceGate() : null;
+  // Keep short clips rolling the whole session so speech is never missed between VAD edges.
+  beginRecorder(capture);
+  showListeningDots();
   const tick = () => {
     if (!capture.requested) return;
     capture.analyser.getFloatTimeDomainData(samples);
     capture.analyser.getFloatFrequencyData(spectrum);
     updateMicWaveform(samples, capture.speaking);
+    if (!capture.recorder) beginRecorder(capture);
     const result = gate
       ? gate.observe(samples, spectrum, capture.audioContext.sampleRate, performance.now())
       : { state: (voiceDetection.shouldVoiceTrigger?.(samples) ? 'start' : 'idle') };
@@ -1023,19 +1084,15 @@ function monitorVoice(capture) {
       setCaptureUi(true);
       showListeningDots();
       sendHealth({ speaking: true });
-      beginRecorder(capture);
     } else if (result.state === 'end') {
       capture.speaking = false;
       setMicrophoneStatus('Microphone is active', 'ok');
       setCaptureUi(true);
       sendHealth({ speaking: false });
-      if (capture.recorder?.state === 'recording') {
-        const elapsed = Date.now() - (capture.segmentStartedAt || Date.now());
-        if (elapsed >= MIN_CLIP_MS) capture.recorder.stop();
-        else capture.segmentTimer = window.setTimeout(() => {
-          if (capture.recorder?.state === 'recording') capture.recorder.stop();
-        }, MIN_CLIP_MS - elapsed);
-      } else {
+      showListeningDots();
+    } else if (result.state === 'speech' || result.state === 'hangover' || result.state === 'rising') {
+      if (!capture.speaking && voiceDetection.shouldVoiceTrigger?.(samples)) {
+        capture.speaking = true;
         showListeningDots();
       }
     }
@@ -1164,6 +1221,10 @@ async function startCaptureSession() {
       voiceFrame: 0,
       speaking: false,
       latestPreviewText: '',
+      livePartialEnglish: '',
+      typewriterDisplayed: '',
+      typewriterQueue: [],
+      typewriterTimer: null,
       previewThrottle: null,
       previewInFlight: false,
       previewSequence: 0,

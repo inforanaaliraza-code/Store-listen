@@ -1,20 +1,20 @@
 (function initializeVoiceDetection(globalScope) {
   const config = Object.freeze({
-    // Ultra-fast live path: open immediately, cut often, stream provisional words while speaking.
-    minRms: 0.008,
-    rmsThreshold: 0.01,
-    peakThreshold: 0.04,
-    snr: 1.9,
-    minSpeechRatio: 0.25,
-    minZcr: 0.012,
-    maxZcr: 0.4,
-    startFrames: 2,
-    endFrames: 5,
-    silenceHangoverMs: 220,
-    // ~1s finals + ~0.7s previews for near word-by-word feel.
-    maxSegmentMs: 1100,
-    minClipMs: 280,
-    previewIntervalMs: 700,
+    // Very sensitive gate so soft store speech is not missed.
+    minRms: 0.0045,
+    rmsThreshold: 0.0065,
+    peakThreshold: 0.025,
+    snr: 1.45,
+    minSpeechRatio: 0.14,
+    minZcr: 0.008,
+    maxZcr: 0.55,
+    startFrames: 1,
+    endFrames: 4,
+    silenceHangoverMs: 160,
+    // Continuous short clips + frequent previews for near word-by-word STT.
+    maxSegmentMs: 750,
+    minClipMs: 220,
+    previewIntervalMs: 450,
     livePreviewEnabled: true,
   });
 
