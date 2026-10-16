@@ -186,12 +186,13 @@ export async function apiGetWithRetry<T>(
   options?: Pick<RequestInit, 'signal'>,
   attempts = 4,
 ): Promise<T> {
+  const signal = options?.signal ?? undefined;
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (options?.signal?.aborted) throw options.signal.reason ?? new DOMException('Aborted', 'AbortError');
+    if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
     try {
-      if (attempt === 0) await wakeApi(options?.signal);
-      return await request<T>(path, { ...options, signal: options?.signal });
+      if (attempt === 0) await wakeApi(signal);
+      return await request<T>(path, { ...options, signal });
     } catch (cause) {
       lastError = cause;
       const retryable = cause instanceof ApiError
