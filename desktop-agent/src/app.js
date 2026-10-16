@@ -5,11 +5,11 @@ const deviceHealth = window.StoreListenDeviceHealth;
 const { isDeviceSessionExpired } = window.StoreListenDeviceConfig;
 const { stopCaptureAndDrain } = window.StoreListenRecordingLifecycle;
 const { formatUserError } = window.StoreListenErrorMessages;
-const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 1600;
-const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 380;
-const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 1100, 700);
+const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 1100;
+const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 280;
+const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 700, 500);
 const LIVE_PREVIEW_ENABLED = voiceDetection.config?.livePreviewEnabled !== false;
-const RECORDER_TIMESLICE_MS = 280;
+const RECORDER_TIMESLICE_MS = 200;
 const MAX_PARALLEL_UPLOADS = 4;
 const setupScreen = $('#setupScreen');
 const appScreen = $('#appScreen');
@@ -42,8 +42,18 @@ const state = {
 function showError(element, message) {
   if (!element) return;
   const formatted = formatUserError(message);
+  // Live capture: never surface Whisper / speech-service / connection noise banners.
+  if (element.id === 'captureError' && shouldHideCaptureBanner(formatted)) {
+    element.textContent = '';
+    element.hidden = true;
+    return;
+  }
   element.textContent = formatted;
   element.hidden = !formatted;
+}
+
+function shouldHideCaptureBanner(message) {
+  return /speech service|whisper|private connection|could not process this audio|could not complete that action|temporarily unavailable|timed? ?out|tailscale|backend whisper|no speech was recognized|only english and spanish|finishing uploads|capture is pausing/i.test(String(message || ''));
 }
 
 function setHidden(selector, hidden) {
@@ -473,29 +483,31 @@ function createParagraphBlock(paragraph, index) {
   return item;
 }
 
-function ensureLivePartialRow() {
-  let row = $('#livePartialRow');
-  if (row) return row;
+function typingDotsMarkup() {
+  return '<span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>';
+}
+
+function ensureConversationHost() {
   const list = $('#transcriptList');
   const empty = $('#emptyTranscript');
   if (empty) empty.remove();
-  if (!$('#liveTranscriptLines')) {
-    const linesHost = document.createElement('div');
+  let linesHost = $('#liveTranscriptLines');
+  if (!linesHost) {
+    linesHost = document.createElement('div');
     linesHost.className = 'live-transcript-lines';
     linesHost.id = 'liveTranscriptLines';
-    list.append(linesHost);
+    list.replaceChildren(linesHost);
   }
-  row = document.createElement('article');
-  row.className = 'transcript-paragraph transcript-partial';
-  row.id = 'livePartialRow';
-  row.innerHTML = '<header class="transcript-paragraph-meta"><span class="transcript-paragraph-label">LIVE</span><time class="transcript-time">…</time></header><p class="transcript-paragraph-body" id="livePartialBody"></p><p class="transcript-paragraph-en" id="livePartialEn" hidden><span class="transcript-en-tag">EN</span> <span id="livePartialEnText"></span></p>';
-  list.append(row);
-  return row;
+  $('#livePartialRow')?.remove();
+  return linesHost;
 }
 
 function clearLivePartial() {
-  $('#livePartialRow')?.remove();
-  if (state.capture) state.capture.latestPreviewText = '';
+  $('#liveTypingTrail')?.remove();
+  if (state.capture) {
+    state.capture.latestPreviewText = '';
+    state.capture.livePartialEnglish = '';
+  }
 }
 
 function showLivePartial(segment) {
@@ -511,23 +523,79 @@ function showLivePartial(segment) {
     && !(transcriptTools.looksLikeSpanishText?.(translated) || /señor|tenemos|producto|gracias|hola|dólares|dolares/i.test(translated))
     ? translated
     : '';
-  ensureLivePartialRow();
-  const body = $('#livePartialBody');
-  const enRow = $('#livePartialEn');
-  const enText = $('#livePartialEnText');
-  if (body) body.textContent = original;
-  if (enRow && enText) {
-    if (spanish) {
-      enRow.hidden = false;
-      enText.textContent = english || 'Translating…';
-    } else {
-      enRow.hidden = true;
-      enText.textContent = '';
-    }
+  if (state.capture) {
+    state.capture.latestPreviewText = original;
+    state.capture.livePartialEnglish = english;
   }
-  if (state.capture) state.capture.latestPreviewText = original;
+  const host = ensureConversationHost();
+  let body = host.querySelector('.transcript-paragraph:last-of-type .transcript-paragraph-body');
+  if (!body) {
+    const item = document.createElement('article');
+    item.className = 'transcript-paragraph';
+    item.innerHTML = `<header class="transcript-paragraph-meta"><span class="transcript-paragraph-label">Paragraph 01</span><time class="transcript-time">${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date())}</time></header><p class="transcript-paragraph-body"></p>`;
+    host.append(item);
+    body = item.querySelector('.transcript-paragraph-body');
+  }
+  let trail = $('#liveTypingTrail');
+  if (!trail) {
+    trail = document.createElement('span');
+    trail.id = 'liveTypingTrail';
+    trail.className = 'live-typing-trail';
+    body.append(document.createTextNode(body.textContent?.trim() ? ' ' : ''));
+    body.append(trail);
+  } else if (trail.parentElement !== body) {
+    body.append(document.createTextNode(body.textContent?.trim() ? ' ' : ''));
+    body.append(trail);
+  }
+  const finalized = (body.childNodes[0]?.nodeType === Node.TEXT_NODE
+    ? body.childNodes[0].textContent
+    : [...body.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join('')).trim();
+  // Prefer appending only the newest words that are not already finalized.
+  let liveWords = original;
+  if (finalized && original.toLowerCase().startsWith(finalized.toLowerCase())) {
+    liveWords = original.slice(finalized.length).trim();
+  }
+  trail.innerHTML = `${liveWords ? `<span class="live-words">${liveWords}</span> ` : ''}${typingDotsMarkup()}`;
+  const paragraph = body.closest('.transcript-paragraph');
+  let en = paragraph?.querySelector('.transcript-paragraph-en');
+  if (spanish) {
+    if (!en) {
+      en = document.createElement('p');
+      en.className = 'transcript-paragraph-en';
+      en.innerHTML = '<span class="transcript-en-tag">EN</span> <span class="live-en-text"></span>';
+      paragraph.append(en);
+    }
+    const enText = en.querySelector('.live-en-text') || en;
+    if (en.querySelector('.live-en-text')) en.querySelector('.live-en-text').textContent = english || 'Translating…';
+    else en.lastChild.textContent = ` ${english || 'Translating…'}`;
+  }
   const list = $('#transcriptList');
   if (list) list.scrollTop = list.scrollHeight;
+}
+
+function showListeningDots() {
+  if (!state.capture?.requested) return;
+  const host = ensureConversationHost();
+  let body = host.querySelector('.transcript-paragraph:last-of-type .transcript-paragraph-body');
+  if (!body) {
+    const item = document.createElement('article');
+    item.className = 'transcript-paragraph';
+    item.innerHTML = `<header class="transcript-paragraph-meta"><span class="transcript-paragraph-label">Paragraph 01</span><time class="transcript-time">${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date())}</time></header><p class="transcript-paragraph-body"></p>`;
+    host.append(item);
+    body = item.querySelector('.transcript-paragraph-body');
+  }
+  let trail = $('#liveTypingTrail');
+  if (!trail) {
+    trail = document.createElement('span');
+    trail.id = 'liveTypingTrail';
+    trail.className = 'live-typing-trail';
+    if (body.textContent?.trim()) body.append(document.createTextNode(' '));
+    body.append(trail);
+  }
+  if (!trail.querySelector('.typing-dots')) {
+    const words = trail.querySelector('.live-words')?.outerHTML || '';
+    trail.innerHTML = `${words ? `${words} ` : ''}${typingDotsMarkup()}`;
+  }
 }
 
 function captureDuration(session) {
@@ -750,6 +818,9 @@ function addTranscript(segment) {
   clearLivePartial();
   saveTranscriptArchive();
   renderLiveTranscript(session);
+  if (state.capture?.requested && (state.capture.speaking || state.capture.inflightUploads?.size)) {
+    showListeningDots();
+  }
   state.transcriptCount += 1;
   $('#transcriptCount').textContent = String(state.transcriptCount);
   $('#navTranscriptCount').textContent = String(state.sessions.length);
@@ -809,11 +880,7 @@ async function uploadSegment(capture, blob, sequence, offset, duration) {
   });
   else {
     capture.latestPreviewText = '';
-    if (response.analysis_status === 'unsupported_language') {
-      showError($('#captureError'), 'Only English and Spanish are transcribed. Other languages are ignored.');
-    } else if (response.analysis_status === 'no_speech') {
-      // Quiet / hallucinated clips are dropped on purpose — keep listening.
-    }
+    // Quiet / unsupported / failed clips are dropped silently — keep listening.
   }
   if (response.segment) showError($('#captureError'), '');
   setApiStatus(true);
@@ -831,10 +898,12 @@ function enqueueUpload(capture, blob, sequence, offset, duration) {
     }
   })().catch(async (error) => {
     if (await returnToDeviceActivation(error)) return;
-    showError($('#captureError'), `${error.message} Capture is pausing so audio is not silently lost.`);
-    capture.requested = false;
+    // Never auto-stop on a failed clip — stay LIVE until manual Stop or PC sleep/shutdown.
     setApiStatus(false);
-    window.setTimeout(() => { void stopCapture(); }, 0);
+    if (capture.requested) {
+      setMicrophoneStatus('Microphone is active', 'ok');
+      setCaptureUi(true);
+    }
   });
   capture.inflightUploads.add(job);
   refreshUploadDrain(capture);
@@ -901,8 +970,12 @@ function beginRecorder(capture) {
     })();
   };
   recorder.onerror = () => {
-    showError($('#captureError'), 'Microphone recording failed. Check the selected input and Windows microphone permissions.');
-    capture.requested = false;
+    // Keep session LIVE; a single recorder fault must not end the day.
+    if (capture.requested) {
+      capture.recorder = null;
+      setMicrophoneStatus('Microphone is active', 'ok');
+      if (capture.speaking) beginRecorder(capture);
+    }
   };
   recorder.onstop = () => {
     if (capture.recorder === recorder) capture.recorder = null;
@@ -916,7 +989,12 @@ function beginRecorder(capture) {
       const sequence = ++capture.sequence;
       enqueueUpload(capture, blob, sequence, offset, duration);
     }
+    // Stay armed: if still speaking, continue immediately; otherwise wait for the next voice start.
     if (capture.requested && capture.speaking) beginRecorder(capture);
+    else if (capture.requested) {
+      setMicrophoneStatus('Microphone is active', 'ok');
+      showListeningDots();
+    }
   };
   recorder.start(RECORDER_TIMESLICE_MS);
   capture.segmentTimer = window.setTimeout(() => {
@@ -940,13 +1018,16 @@ function monitorVoice(capture) {
     if (result.state === 'start' || energyStart) {
       capture.speaking = true;
       $('#captureTitle').textContent = 'Voice detected';
-      $('#captureMessage').textContent = 'Microphone is active. Clear speech joins the English conversation after transcription.';
+      $('#captureMessage').textContent = 'Microphone is active. Words appear live as you speak.';
       setMicrophoneStatus('Microphone is active', 'ok');
+      setCaptureUi(true);
+      showListeningDots();
       sendHealth({ speaking: true });
       beginRecorder(capture);
     } else if (result.state === 'end') {
       capture.speaking = false;
       setMicrophoneStatus('Microphone is active', 'ok');
+      setCaptureUi(true);
       sendHealth({ speaking: false });
       if (capture.recorder?.state === 'recording') {
         const elapsed = Date.now() - (capture.segmentStartedAt || Date.now());
@@ -954,6 +1035,8 @@ function monitorVoice(capture) {
         else capture.segmentTimer = window.setTimeout(() => {
           if (capture.recorder?.state === 'recording') capture.recorder.stop();
         }, MIN_CLIP_MS - elapsed);
+      } else {
+        showListeningDots();
       }
     }
     capture.voiceFrame = window.requestAnimationFrame(tick);
@@ -961,13 +1044,16 @@ function monitorVoice(capture) {
   capture.voiceFrame = window.requestAnimationFrame(tick);
 }
 
-async function stopCapture() {
+async function stopCapture({ reason = 'manual' } = {}) {
   if (state.captureStartPromise) await state.captureStartPromise;
   const capture = state.capture;
   if (!capture) return;
   if (capture.stopPromise) return capture.stopPromise;
+  // Session save only for manual Stop or PC sleep/shutdown — never for silence/upload errors.
+  if (!['manual', 'sleep', 'shutdown', 'quit'].includes(reason)) return;
   capture.requested = false;
   capture.speaking = false;
+  clearLivePartial();
   setCaptureUi(false, true);
   clearTimeout(capture.segmentTimer);
   if (capture.voiceFrame) window.cancelAnimationFrame(capture.voiceFrame);
@@ -1208,14 +1294,14 @@ $('#deviceForm').addEventListener('submit', async (event) => {
 });
 
 $('#captureButton').addEventListener('click', () => {
-  if (state.capture?.requested) void stopCapture();
-  else if (state.capture) void stopCapture();
+  if (state.capture?.requested) void stopCapture({ reason: 'manual' });
+  else if (state.capture) void stopCapture({ reason: 'manual' });
   else void startCapture();
 });
 
 window.storeListen.onCaptureStopRequested(async () => {
   try {
-    await stopCapture();
+    await stopCapture({ reason: 'quit' });
   } finally {
     window.storeListen.captureStopComplete();
   }
@@ -1226,8 +1312,7 @@ window.storeListen.onWindowOpened(() => {
 });
 
 window.storeListen.onSystemSuspend(async () => {
-  showError($('#captureError'), 'Computer sleep detected — stopping capture and syncing to the server.');
-  if (state.capture) await stopCapture();
+  if (state.capture) await stopCapture({ reason: 'sleep' });
 });
 
 window.storeListen.onSystemResume(() => {

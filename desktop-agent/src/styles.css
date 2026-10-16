@@ -189,8 +189,13 @@ svg { display: block; }
 .transcript-paragraph-body { margin: 0; color: #24362c; font-size: 19px; line-height: 1.7; overflow-wrap: anywhere; }
 .transcript-paragraph-en { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 0; color: #2f6b4d; font-size: 16px; line-height: 1.55; overflow-wrap: anywhere; }
 .transcript-en-tag { flex: 0 0 auto; margin-top: 2px; padding: 2px 6px; border: 1px solid #d5e6da; border-radius: 3px; color: #2f6b4d; background: #f1f8f3; font-size: 10px; font-weight: 750; letter-spacing: .04em; }
-.transcript-partial { opacity: 0.88; border-style: dashed; }
-.transcript-partial .transcript-paragraph-body { color: #3d5c4a; }
+.live-typing-trail { display: inline; }
+.live-typing-trail .live-words { color: #3d5c4a; }
+.typing-dots { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; vertical-align: middle; }
+.typing-dots i { width: 5px; height: 5px; border-radius: 50%; background: #6f9b7f; opacity: 0.35; animation: typing-dot 1s infinite ease-in-out; }
+.typing-dots i:nth-child(2) { animation-delay: .15s; }
+.typing-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes typing-dot { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
 .mic-waveform { display: flex; align-items: end; gap: 2px; height: 22px; min-width: 56px; }
 .mic-waveform i { width: 3px; border-radius: 2px; background: #98a59b; min-height: 4px; transition: height .08s linear, background .12s ease; }
 .capture-bar.recording .mic-waveform i { background: #cf7755; }

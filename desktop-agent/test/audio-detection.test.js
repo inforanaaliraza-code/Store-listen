@@ -26,13 +26,13 @@ function spectrum(speechDb, noiseDb) {
 }
 
 test('voice gate opens quickly and streams short live clips', () => {
-  assert.ok(config.startFrames <= 3, 'open the gate quickly when speech starts');
-  assert.ok(config.endFrames <= 6, 'cut soon after a short pause for live feel');
-  assert.ok(config.silenceHangoverMs <= 360, 'do not wait for a full sentence before uploading');
+  assert.ok(config.startFrames <= 2, 'open the gate quickly when speech starts');
+  assert.ok(config.endFrames <= 5, 'cut soon after a short pause for live feel');
+  assert.ok(config.silenceHangoverMs <= 260, 'do not wait for a full sentence before uploading');
   assert.equal(config.livePreviewEnabled, true, 'live Whisper previews stream provisional words while speaking');
-  assert.ok(config.maxSegmentMs <= 1800, 'short clips keep transcript updates near real time');
-  assert.ok(config.minClipMs <= 450, 'allow short spoken bursts onto the live path');
-  assert.ok(config.previewIntervalMs <= 1200, 'preview cadence stays under ~1.2s');
+  assert.ok(config.maxSegmentMs <= 1200, 'short clips keep transcript updates near real time');
+  assert.ok(config.minClipMs <= 320, 'allow short spoken bursts onto the live path');
+  assert.ok(config.previewIntervalMs <= 800, 'preview cadence stays under ~0.8s');
 
   const gate = createVoiceGate();
   const speech = tone(512, 0.1);

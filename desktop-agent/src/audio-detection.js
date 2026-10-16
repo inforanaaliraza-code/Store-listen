@@ -1,20 +1,20 @@
 (function initializeVoiceDetection(globalScope) {
   const config = Object.freeze({
-    // Fast live path: open quickly, cut often, stream provisional text while speaking.
-    minRms: 0.009,
-    rmsThreshold: 0.011,
-    peakThreshold: 0.045,
-    snr: 2.0,
-    minSpeechRatio: 0.28,
+    // Ultra-fast live path: open immediately, cut often, stream provisional words while speaking.
+    minRms: 0.008,
+    rmsThreshold: 0.01,
+    peakThreshold: 0.04,
+    snr: 1.9,
+    minSpeechRatio: 0.25,
     minZcr: 0.012,
     maxZcr: 0.4,
-    startFrames: 3,
-    endFrames: 6,
-    silenceHangoverMs: 320,
-    // Short clips + live previews so words appear before the full sentence ends.
-    maxSegmentMs: 1600,
-    minClipMs: 380,
-    previewIntervalMs: 1100,
+    startFrames: 2,
+    endFrames: 5,
+    silenceHangoverMs: 220,
+    // ~1s finals + ~0.7s previews for near word-by-word feel.
+    maxSegmentMs: 1100,
+    minClipMs: 280,
+    previewIntervalMs: 700,
     livePreviewEnabled: true,
   });
 
