@@ -26,6 +26,36 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("storelisten")
 
 
+async def _bootstrap_background() -> None:
+    """Heavy startup work after /health is already serving (Render 5s health window)."""
+    try:
+        await asyncio.to_thread(check_database_connection)
+        def _seed_and_cleanup() -> None:
+            with SessionLocal() as db:
+                if settings.demo_mode:
+                    seed_if_empty(db)
+                cleanup_expired_audio(db)
+        await asyncio.to_thread(_seed_and_cleanup)
+        speech_name = resolve_speech_provider_name()
+        await asyncio.to_thread(get_speech_provider)
+        if speech_name == "whisper":
+            logger.warning(
+                "Speech provider is local Whisper — expect multi-minute latency on free CPUs. "
+                "Set SPEECH_API_KEY or AI_API_KEY and SPEECH_PROVIDER=auto for 1–3s cloud STT."
+            )
+            if settings.whisper_warmup_on_start:
+                await asyncio.to_thread(WhisperSpeechProvider.warm_up)
+        else:
+            logger.info(
+                "Fast cloud speech provider active resolved=%s model=%s",
+                speech_name,
+                settings.speech_cloud_model,
+            )
+        logger.info("Store Listen API ready demo_mode=%s db=mongodb speech=%s", settings.demo_mode, speech_name)
+    except Exception:
+        logger.exception("Background bootstrap failed — API is up but some features may be unavailable")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     production = settings.app_env.lower() == "production"
@@ -34,30 +64,20 @@ async def lifespan(_: FastAPI):
         enabled=settings.redis_event_bus_enabled,
         required=production,
     )
-    warm_task = None
+    # Yield immediately so Render health checks pass while Mongo/seed/speech warm in background.
+    bootstrap = asyncio.create_task(_bootstrap_background())
     try:
-        check_database_connection()
-        with SessionLocal() as db:
-            if settings.demo_mode:
-                seed_if_empty(db)
-            cleanup_expired_audio(db)
-        speech_name = resolve_speech_provider_name()
-        get_speech_provider()
-        if speech_name == "whisper":
-            logger.warning(
-                "Speech provider is local Whisper — expect multi-minute latency on free CPUs. "
-                "Set SPEECH_API_KEY or AI_API_KEY and SPEECH_PROVIDER=auto for 1–3s cloud STT."
-            )
-            if settings.whisper_warmup_on_start:
-                warm_task = asyncio.create_task(asyncio.to_thread(WhisperSpeechProvider.warm_up))
-        else:
-            logger.info("Fast cloud speech provider active resolved=%s model=%s", speech_name, settings.speech_cloud_model)
-        logger.info("Store Listen API ready demo_mode=%s db=mongodb speech=%s", settings.demo_mode, speech_name)
+        logger.info("Store Listen API listening (bootstrap running in background)")
         yield
     finally:
-        if warm_task and not warm_task.done():
-            warm_task.cancel()
+        if not bootstrap.done():
+            bootstrap.cancel()
+            try:
+                await bootstrap
+            except asyncio.CancelledError:
+                pass
         await hub.stop()
+
 
 app = FastAPI(title="Store Listen API", version="1.0.0", docs_url="/docs", lifespan=lifespan)
 app.add_middleware(
@@ -107,6 +127,15 @@ async def security_and_limits(request: Request, call_next):
     supplied_request_id = request.headers.get("x-request-id", "")
     request_id = supplied_request_id if re.fullmatch(r"[A-Za-z0-9._-]{1,128}", supplied_request_id) else str(uuid.uuid4())
     request.state.request_id = request_id
+    # Never rate-limit or block Render's health probe.
+    if request.url.path in {"/health", "/ready"}:
+        try:
+            response = await call_next(request)
+        except Exception:
+            logger.exception("Unhandled error rid=%s", request_id)
+            response = JSONResponse({"detail": "Internal error", "request_id": request_id}, status_code=500)
+        return _secure_response(response, request_id)
+
     client = request.client.host if request.client else "unknown"
     now = time.time()
     global _last_rate_limit_prune
@@ -136,5 +165,3 @@ async def security_and_limits(request: Request, call_next):
         logger.exception("Unhandled error rid=%s", request_id)
         response = JSONResponse({"detail": "Internal error", "request_id": request_id}, status_code=500)
     return _secure_response(response, request_id)
-
-

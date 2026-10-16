@@ -61,12 +61,13 @@ services:
         value: "2"
       - key: WHISPER_NUM_WORKERS
         value: "1"
-      - key: WHISPER_TRANSLATE_SPANISH
-        value: "true"
+      # Previews stay on; busy previews are skipped so free-tier health checks stay green.
       - key: WHISPER_PREVIEW_ENABLED
         value: "true"
       - key: WHISPER_WARMUP_ON_START
         value: "false"
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "300"
       - key: POS_PROVIDER
         value: mock
       - key: STORAGE_PROVIDER

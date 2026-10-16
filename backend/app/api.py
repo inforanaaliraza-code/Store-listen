@@ -22,6 +22,24 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.database import SessionLocal, get_db
+
+# Free Render has one worker — serialize STT so /health never starves behind Whisper/Groq jobs.
+_stt_slots = asyncio.Semaphore(1)
+
+
+async def _transcribe_audio_file(provider: Any, path: str, language_hint: str | None, *, wait: bool = True):
+    """Run provider.transcribe_file under a global STT slot."""
+    if wait:
+        async with _stt_slots:
+            return await run_in_threadpool(provider.transcribe_file, path, language_hint)
+    try:
+        await asyncio.wait_for(_stt_slots.acquire(), timeout=0.05)
+    except TimeoutError:
+        return None
+    try:
+        return await run_in_threadpool(provider.transcribe_file, path, language_hint)
+    finally:
+        _stt_slots.release()
 from app.models import (
     Alert,
     AiProcessingRun,
@@ -300,7 +318,8 @@ def _employee_store_for_write(db: Session, store_id: str, user: User) -> Store:
 
 
 @health.get("/health")
-def healthcheck() -> dict[str, Any]:
+async def healthcheck() -> dict[str, Any]:
+    # Async so Render probes never wait behind Whisper threadpool work.
     return {"status": "ok", "app": "store-listen-api", "demo_mode": settings.demo_mode}
 
 
@@ -1372,7 +1391,15 @@ async def preview_audio_transcription(
     try:
         with os.fdopen(fd, "wb") as audio_file:
             audio_file.write(audio_bytes)
-        result = await run_in_threadpool(provider.transcribe_file, temp_path, language_hint)
+        # Skip preview when a final STT job already owns the slot — keep health/live finals responsive.
+        result = await _transcribe_audio_file(provider, temp_path, language_hint, wait=False)
+        if result is None:
+            return {
+                "segment": None,
+                "preview_sequence": preview_sequence,
+                "transcription_ms": 0,
+                "preview_status": "busy",
+            }
     except (NoSpeechDetected, UnsupportedLanguageDetected):
         return {"segment": None, "preview_sequence": preview_sequence, "transcription_ms": round((perf_counter() - started) * 1000)}
     except RuntimeError as exc:
@@ -1503,7 +1530,7 @@ async def transcribe_audio(
             with os.fdopen(fd, "wb") as audio_file:
                 audio_file.write(audio_bytes)
                 audio_file.flush()
-            result = await run_in_threadpool(provider.transcribe_file, temp_path, language_hint)
+            result = await _transcribe_audio_file(provider, temp_path, language_hint, wait=True)
             transcription_ms = round((perf_counter() - transcription_started) * 1000)
             detected_language = normalize_supported_language(result.language)
             if detected_language is None:
