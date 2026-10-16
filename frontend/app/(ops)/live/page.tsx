@@ -109,12 +109,57 @@ type Line = {
   translated: string;
   confidence: number;
   final: boolean;
+  at: number;
 };
 
-function LiveTypingDots() {
-  return <span className="transcript-typing-dots" role="status" aria-label="Transcribing speech">
-    {[0, 1, 2, 3, 4].map((dot) => <i key={dot} />)}
-  </span>;
+const PARAGRAPH_GAP_MS = 60_000;
+const JUNK_EXACT = new Set([
+  'tchau', 'chao', 'obrigado', 'obrigada', 'adeus', 'valeu', 'ciao',
+  'e ai', 'ai', 'ei', 'oie', 'opa',
+  'thank you', 'thanks', 'bye', 'goodbye', 'okay', 'ok', 'hmm', 'uh', 'um', 'yeah',
+]);
+const ALLOWED_SHORT = new Set(['hola', 'gracias', 'adios', 'si', 'no', 'hello', 'hi', 'yes', 'please', 'sorry', 'help']);
+
+function normalizeJunkPhrase(text: string) {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isJunkTranscript(text: string) {
+  const phrase = normalizeJunkPhrase(text || '');
+  if (!phrase) return true;
+  if (JUNK_EXACT.has(phrase)) return true;
+  const words = phrase.split(' ').filter(Boolean);
+  if (words.length === 1 && words[0].length <= 6 && !ALLOWED_SHORT.has(words[0])) return true;
+  if (words.length <= 2 && words.every((word) => word.length <= 3) && !words.some((word) => ALLOWED_SHORT.has(word))) {
+    return true;
+  }
+  return false;
+}
+
+function groupLinesIntoParagraphs(lines: Line[]) {
+  const sorted = lines.slice().sort((left, right) => left.at - right.at);
+  const paragraphs: { startedAt: number; lines: Line[] }[] = [];
+  let current: { startedAt: number; endedAt: number; lines: Line[] } | null = null;
+  for (const line of sorted) {
+    if (!current || line.at - current.endedAt > PARAGRAPH_GAP_MS) {
+      current = { startedAt: line.at, endedAt: line.at, lines: [line] };
+      paragraphs.push(current);
+    } else {
+      current.lines.push(line);
+      current.endedAt = line.at;
+    }
+  }
+  return paragraphs;
+}
+
+function formatParagraphTime(value: number) {
+  return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date(value));
 }
 
 type TranscriptionResponse = {
@@ -242,23 +287,26 @@ export default function LivePage() {
     const transcript = await apiGet<{ segments: { id: string; speaker_label: string; language: string; original_text: string; translated_text: string | null; confidence: number; start_time: number }[] }>(
       `/api/v1/conversations/${encodeURIComponent(conversation.id)}/transcript?page_size=500`,
     );
-    const recovered = transcript.segments.map((segment) => ({
-      id: segment.id,
-      conversationId: conversation.id,
-      speaker: segment.speaker_label === 'Speaker not identified' || segment.speaker_label === 'Unattributed speaker'
-        ? 'Speaker'
-        : (segment.speaker_label || 'Speaker'),
-      language: segment.language,
-      original: segment.original_text,
-      translated: segment.translated_text || segment.original_text,
-      confidence: segment.confidence,
-      final: true,
-      timeline: Date.parse(conversation.started_at) + segment.start_time * 1000,
-    })).sort((left, right) => left.timeline - right.timeline);
+    const recovered = transcript.segments
+      .map((segment) => ({
+        id: segment.id,
+        conversationId: conversation.id,
+        speaker: segment.speaker_label === 'Speaker not identified' || segment.speaker_label === 'Unattributed speaker'
+          ? 'Speaker'
+          : (segment.speaker_label || 'Speaker'),
+        language: segment.language,
+        original: segment.original_text,
+        translated: segment.translated_text || segment.original_text,
+        confidence: segment.confidence,
+        final: true,
+        at: Date.parse(conversation.started_at) + segment.start_time * 1000,
+      }))
+      .filter((line) => !isJunkTranscript(line.original))
+      .sort((left, right) => left.at - right.at);
     if (!recovered.length) return;
     const unique = recovered.filter((line, index) => recovered.findIndex((item) => item.id === line.id) === index);
     segmentIdsRef.current = new Set(unique.map((line) => line.id));
-    setLines(unique.map(({ timeline: _timeline, ...line }) => line));
+    setLines(unique);
     setPartial('');
   }, [storeId]);
 
@@ -399,6 +447,7 @@ export default function LivePage() {
         finalCaptureSequenceRef.current = Math.max(finalCaptureSequenceRef.current, event.captureSequence ?? 0);
         setPartial('');
         if (event.segmentId && segmentIdsRef.current.has(event.segmentId)) return;
+        if (isJunkTranscript(event.originalText || '')) return;
         if (event.segmentId) segmentIdsRef.current.add(event.segmentId);
         setLines((items) => [
           ...items,
@@ -411,6 +460,7 @@ export default function LivePage() {
             translated: event.translatedText || event.originalText || '',
             confidence: event.confidence || 0,
             final: true,
+            at: Date.parse(event.timestamp || '') || Date.now(),
           },
         ]);
       }
@@ -433,8 +483,7 @@ export default function LivePage() {
     form.append('session_offset_seconds', String(sessionOffsetSeconds));
     if (role === 'employee') form.append('employee_id', selectedEmployeeId);
     if (conversationIdRef.current) form.append('conversation_id', conversationIdRef.current);
-    setCaptureStatus(`Transcribing clip ${sequence}…`);
-    setPartial(`Transcribing clip ${sequence}…`);
+    setCaptureStatus('Listening…');
     const result = await apiUpload<TranscriptionResponse>('/api/v1/audio/transcribe', form, AUDIO_TRANSCRIPTION_TIMEOUT_MS);
     finalCaptureSequenceRef.current = Math.max(finalCaptureSequenceRef.current, sequence);
     setPartial('');
@@ -444,6 +493,10 @@ export default function LivePage() {
       setAnalysisNotice(result.analysis_status === 'no_speech'
         ? 'No speech detected in this clip; listening continues.'
         : `Ignored unsupported language${result.detected_language ? ` (${result.detected_language})` : ''}; only English and Spanish are transcribed.`);
+      setCaptureStatus(`Recording · ${result.speech_provider || 'speech'} ready`);
+      return;
+    }
+    if (isJunkTranscript(segment.originalText || '')) {
       setCaptureStatus(`Recording · ${result.speech_provider || 'speech'} ready`);
       return;
     }
@@ -457,6 +510,7 @@ export default function LivePage() {
       translated: segment.translatedText,
       confidence: segment.confidence,
       final: true,
+      at: Date.parse(segment.timestamp || '') || Date.now(),
     }]);
     const sttLabel = result.transcription_ms != null
       ? ` · STT ${(result.transcription_ms / 1000).toFixed(1)}s`
@@ -754,28 +808,34 @@ export default function LivePage() {
           <span className={`monitor-live-badge ${conversationStatus === 'LIVE' ? 'is-live' : conversationStatus === 'ENDED' ? 'is-ended' : ''}`}><i />{conversationStatus}</span>
         </header>
         <div className="monitor-transcript" role="log" aria-live="polite" aria-relevant="additions text">
-          {lines.length || partial ? (
-            <div className="monitor-conversation-lines">
-              {lines.map((line) => (
-                <article key={line.id} className="monitor-line">
-                  <header className="monitor-line-meta">
-                    <span>{line.speaker}</span>
-                    <span>{(line.language || 'en').toUpperCase()}</span>
+          {lines.length ? (
+            <div className="monitor-conversation-paragraphs">
+              {groupLinesIntoParagraphs(lines).map((paragraph, index) => (
+                <article key={`${paragraph.startedAt}-${index}`} className="monitor-paragraph">
+                  <header className="monitor-paragraph-meta">
+                    <span>Paragraph {String(index + 1).padStart(2, '0')}</span>
+                    <time>{formatParagraphTime(paragraph.startedAt)}</time>
                   </header>
-                  <p className="monitor-line-original">{line.original}</p>
-                  {line.translated && line.translated !== line.original ? (
-                    <p className="monitor-line-translation">EN: {line.translated}</p>
-                  ) : null}
+                  <p className="monitor-paragraph-body">
+                    {paragraph.lines.map((line, lineIndex) => {
+                      const showGloss = line.language === 'es' && line.translated && line.translated !== line.original;
+                      return (
+                        <span key={line.id}>
+                          {lineIndex > 0 ? ' ' : ''}
+                          {showGloss ? (
+                            <span className="monitor-es-phrase">
+                              {line.original}
+                              <span className="monitor-en-gloss"> ({line.translated})</span>
+                            </span>
+                          ) : line.original}
+                        </span>
+                      );
+                    })}
+                  </p>
                 </article>
               ))}
-              {partial ? (
-                <p className="monitor-conversation-copy">
-                  <span className="monitor-current-phrase">{partial}</span>
-                  <LiveTypingDots />
-                </p>
-              ) : null}
             </div>
-          ) : <div className="monitor-empty"><strong>{conversationStatus === 'ENDED' ? 'Session ended' : connected ? 'Waiting for a live conversation' : 'Store feed is reconnecting'}</strong><span>{conversationStatus === 'ENDED' ? 'The transcript is saved in conversation history.' : connected ? 'English and Spanish lines appear here; Spanish includes an English translation for staff.' : 'The monitor will resume automatically when the store connection returns.'}</span></div>}
+          ) : <div className="monitor-empty"><strong>{conversationStatus === 'ENDED' ? 'Session ended' : connected ? 'Waiting for a live conversation' : 'Store feed is reconnecting'}</strong><span>{conversationStatus === 'ENDED' ? 'The transcript is saved in conversation history.' : connected ? 'Clear English and Spanish speech flows into paragraphs. After one minute of silence, a new paragraph starts. Spanish phrases show an English gloss inline.' : 'The monitor will resume automatically when the store connection returns.'}</span></div>}
         </div>
         <footer className="monitor-card-footer">
           <span><i className={connected ? 'is-online' : ''} />{connected ? 'Live store feed' : 'Feed unavailable'}</span>

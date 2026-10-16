@@ -3,6 +3,8 @@
   if (typeof module === 'object' && module.exports) module.exports = tools;
   if (root) root.StoreListenTranscript = tools;
 })(typeof window === 'undefined' ? null : window, () => {
+  const PARAGRAPH_GAP_MS = 60_000;
+
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, (character) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -46,6 +48,64 @@
     return `${store}-capture-${String(session.fileNumber).padStart(3, '0')}-${date}.${extension}`;
   }
 
+  function entryTimestamp(entry) {
+    if (entry?.capturedAt) return new Date(entry.capturedAt).getTime();
+    if (Number.isFinite(entry?.timeline)) return Number(entry.timeline);
+    return 0;
+  }
+
+  function groupEntriesIntoParagraphs(entries, gapMs = PARAGRAPH_GAP_MS) {
+    const sorted = (Array.isArray(entries) ? entries : []).slice().sort((left, right) => {
+      const delta = entryTimestamp(left) - entryTimestamp(right);
+      if (delta !== 0) return delta;
+      return (Number(left.number) || 0) - (Number(right.number) || 0);
+    });
+    const paragraphs = [];
+    let current = null;
+    for (const entry of sorted) {
+      const at = entryTimestamp(entry);
+      if (!current || at - current.endedAt > gapMs) {
+        current = { startedAt: at, endedAt: at, entries: [entry] };
+        paragraphs.push(current);
+      } else {
+        current.entries.push(entry);
+        current.endedAt = at;
+      }
+    }
+    return paragraphs;
+  }
+
+  function segmentFromEntry(entry) {
+    if (entry?.segment && typeof entry.segment === 'object') return entry.segment;
+    return entry || {};
+  }
+
+  function paragraphParts(entries) {
+    return (entries || []).map((entry) => {
+      const segment = segmentFromEntry(entry);
+      const original = String(segment.originalText || entry.original || '').trim();
+      if (!original) return null;
+      const translated = String(segment.translatedText || entry.translated || '').trim();
+      const language = String(segment.language || entry.language || 'en').toLowerCase();
+      if (language === 'es' && translated && translated !== original) {
+        return { kind: 'es', original, translation: translated };
+      }
+      return { kind: 'text', original };
+    }).filter(Boolean);
+  }
+
+  function formatParagraphPlain(entries) {
+    return paragraphParts(entries).map((part) => (
+      part.kind === 'es' ? `${part.original} (${part.translation})` : part.original
+    )).join(' ');
+  }
+
+  function formatTime(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(date);
+  }
+
   function transcriptText(storeName, deviceName, session) {
     const lines = [
       'STORE LISTEN TRANSCRIPT',
@@ -57,34 +117,61 @@
       `Status: ${session.status}`,
       '',
     ];
-    session.entries.slice().sort((left, right) => left.number - right.number).forEach((entry) => {
-      const segment = entry.segment;
-      const speaker = !segment.speakerLabel
-        || segment.speakerLabel === 'Speaker not identified'
-        || segment.speakerLabel === 'Unattributed speaker'
-        ? 'Speaker'
-        : segment.speakerLabel;
-      lines.push(`${entry.number}. ${new Date(entry.capturedAt).toLocaleTimeString()} | ${speaker} | ${(segment.language || 'und').toUpperCase()}`);
-      lines.push(segment.originalText || 'No speech recognized.');
-      if (segment.translatedText && segment.translatedText !== segment.originalText) lines.push(`Translation: ${segment.translatedText}`);
+    const paragraphs = groupEntriesIntoParagraphs(session.entries || []);
+    paragraphs.forEach((paragraph, index) => {
+      lines.push(`--- Paragraph ${index + 1} · ${formatTime(paragraph.startedAt)} ---`);
+      lines.push(formatParagraphPlain(paragraph.entries) || 'No speech recognized.');
       lines.push('');
     });
-    if (!session.entries.length) lines.push('No speech was recognized in this capture.');
+    if (!paragraphs.length) lines.push('No speech was recognized in this capture.');
     return lines.join('\n');
   }
 
   function pdfHtml(payload = {}) {
-    const entries = Array.isArray(payload.entries) ? payload.entries.slice(0, 10000) : [];
-    const entryMarkup = entries.map((entry) => `
+    const sourceEntries = Array.isArray(payload.entries) ? payload.entries.slice(0, 10000) : [];
+    const canGroup = sourceEntries.some((entry) => entry.capturedAt || Number.isFinite(entry.timeline));
+    const paragraphs = canGroup
+      ? groupEntriesIntoParagraphs(sourceEntries)
+      : sourceEntries.map((entry, index) => ({
+        startedAt: entry.time || index,
+        endedAt: entry.time || index,
+        entries: [entry],
+      }));
+    const entryMarkup = paragraphs.map((paragraph, index) => {
+      const body = formatParagraphPlain(paragraph.entries.map((entry) => (
+        entry.segment ? entry : {
+          segment: {
+            originalText: entry.originalText || entry.original,
+            translatedText: entry.translatedText || entry.translated,
+            language: entry.language,
+          },
+          capturedAt: entry.capturedAt,
+          number: entry.number,
+        }
+      )));
+      const stamp = typeof paragraph.startedAt === 'number'
+        ? formatTime(paragraph.startedAt)
+        : escapeHtml(String(paragraph.startedAt || ''));
+      return `
     <article class="entry">
-      <header><strong>${escapeHtml(entry.number)}. ${escapeHtml(entry.speaker)}</strong><span>${escapeHtml(entry.time)} · ${escapeHtml(String(entry.language || 'und').toUpperCase())}</span></header>
-      <p>${escapeHtml(entry.originalText)}</p>
-      ${entry.translatedText && entry.translatedText !== entry.originalText ? `<p class="translation">${escapeHtml(entry.translatedText)}</p>` : ''}
-    </article>`).join('');
+      <header><strong>Paragraph ${index + 1}</strong><span>${stamp}</span></header>
+      <p>${escapeHtml(body || 'No speech recognized.')}</p>
+    </article>`;
+    }).join('');
     return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>
-    *{box-sizing:border-box}body{margin:0;padding:34px;color:#1b2b22;font:12pt/1.55 Arial,sans-serif}h1{margin:0 0 6px;font-size:24pt}h2{margin:0 0 22px;color:#28744d;font-size:11pt;font-weight:600}.meta{margin-bottom:24px;padding:14px 16px;border:1px solid #dce8dd;background:#f5f9f4}.meta p{margin:3px 0}.entry{padding:14px 0;border-top:1px solid #dfe7df;break-inside:avoid}.entry header{display:flex;justify-content:space-between;gap:16px;color:#36714f;font-size:9pt}.entry header span{color:#748178}.entry p{margin:8px 0 0;font-size:13pt;overflow-wrap:anywhere}.entry .translation{color:#65786b;font-size:11pt}
+    *{box-sizing:border-box}body{margin:0;padding:34px;color:#1b2b22;font:12pt/1.55 Arial,sans-serif}h1{margin:0 0 6px;font-size:24pt}h2{margin:0 0 22px;color:#28744d;font-size:11pt;font-weight:600}.meta{margin-bottom:24px;padding:14px 16px;border:1px solid #dce8dd;background:#f5f9f4}.meta p{margin:3px 0}.entry{padding:16px 0;border-top:1px solid #dfe7df;break-inside:avoid}.entry header{display:flex;justify-content:space-between;gap:16px;color:#36714f;font-size:9pt}.entry header span{color:#748178}.entry p{margin:10px 0 0;font-size:13pt;line-height:1.65;overflow-wrap:anywhere}
     </style></head><body><h1>Store Listen</h1><h2>Capture ${escapeHtml(payload.filename || '')}</h2><section class="meta"><p><strong>Store:</strong> ${escapeHtml(payload.storeName)}</p><p><strong>Device:</strong> ${escapeHtml(payload.deviceName)}</p><p><strong>Started:</strong> ${escapeHtml(payload.startedAt)}</p><p><strong>Duration:</strong> ${escapeHtml(payload.duration)}</p><p><strong>Status:</strong> ${escapeHtml(payload.status)}</p></section>${entryMarkup || '<p>No speech was recognized in this capture.</p>'}</body></html>`;
   }
 
-  return { normalizeSessions, duration, filename, transcriptText, pdfHtml };
+  return {
+    PARAGRAPH_GAP_MS,
+    normalizeSessions,
+    duration,
+    filename,
+    groupEntriesIntoParagraphs,
+    paragraphParts,
+    formatParagraphPlain,
+    transcriptText,
+    pdfHtml,
+  };
 });

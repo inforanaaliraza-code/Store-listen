@@ -20,6 +20,8 @@ def test_rejects_portuguese_and_random_single_words():
     assert is_hallucinated_transcript("Tchau")
     assert is_hallucinated_transcript("Obrigado")
     assert is_hallucinated_transcript("tchau tchau")
+    assert is_hallucinated_transcript("E aí")
+    assert is_hallucinated_transcript("E ai")
     assert not is_hallucinated_transcript("Gracias")
     assert not is_hallucinated_transcript("¡Adiós!")
 

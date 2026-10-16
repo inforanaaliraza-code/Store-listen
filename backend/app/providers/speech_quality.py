@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+import unicodedata
 from collections import Counter
 
 # Store capture only supports English and Spanish.
@@ -37,6 +38,13 @@ _HALLUCINATION_EXACT = frozenset(
         "obrigada",
         "adeus",
         "valeu",
+        "e ai",
+        "e aí",
+        "ai",
+        "aí",
+        "ei",
+        "oie",
+        "opa",
         "okay",
         "ok",
         "hmm",
@@ -95,6 +103,11 @@ _PORTUGUESE_OR_FOREIGN_TOKENS = frozenset(
         "namaste",
         "shukriya",
         "shukria",
+        "ai",
+        "aí",
+        "oie",
+        "opa",
+        "ei",
     }
 )
 
@@ -148,8 +161,13 @@ def normalize_language(language: str | None) -> str | None:
     return code if code in SUPPORTED_LANGUAGES else None
 
 
+def _strip_accents(text: str) -> str:
+    decomposed = unicodedata.normalize("NFD", text or "")
+    return "".join(char for char in decomposed if unicodedata.category(char) != "Mn")
+
+
 def _normalize_phrase(text: str) -> str:
-    cleaned = re.sub(r"[^\w\s]", " ", (text or "").lower(), flags=re.UNICODE)
+    cleaned = re.sub(r"[^\w\s]", " ", _strip_accents(text or "").lower(), flags=re.UNICODE)
     return " ".join(cleaned.split())
 
 
@@ -224,7 +242,8 @@ def is_hallucinated_transcript(text: str) -> bool:
     if not words:
         return True
 
-    lowered_words = [word.lower() for word in words]
+    lowered_words = [_strip_accents(word.lower()) for word in words]
+    allowed_short = set(_ALLOWED_SHORT_ES) | {token for token in _ALLOWED_SHORT_EN if token not in {"thanks", "thank"}}
 
     # Single unclear/filler token (unless allow-listed Spanish/English store word).
     if len(lowered_words) == 1:
@@ -239,6 +258,11 @@ def is_hallucinated_transcript(text: str) -> bool:
             return False
         # Unknown one-word clips are usually Whisper noise inventions.
         if len(token) <= 6:
+            return True
+
+    # Ultra-short unclear clips like "E aí" / "ei ei" — not real store speech.
+    if len(lowered_words) <= 2 and all(len(token) <= 3 for token in lowered_words):
+        if not any(token in allowed_short for token in lowered_words) and not looks_like_spanish(text):
             return True
 
     counts = Counter(lowered_words)

@@ -179,11 +179,16 @@ svg { display: block; }
 .section-header h2 { margin: 2px 0 0; color: #304239; font-family: var(--font-ui); font-size: 18px; font-weight: 650; }
 .feed-count { padding: 4px 7px; border: 1px solid #e4ece5; border-radius: 3px; color: #748279; background: #fbfcfa; font-size: 8px; font-weight: 750; letter-spacing: .6px; }
 .transcript-list { min-height: 0; flex: 1; overflow: auto; scroll-behavior: smooth; }
-.live-transcript-lines { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px 28px; min-height: 100%; }
+.live-transcript-lines { display: flex; flex-direction: column; gap: 22px; padding: 20px 22px 32px; min-height: 100%; }
 .live-transcript-copy { min-height: 100%; padding: 22px 24px; animation: rise .25s ease-out both; }
 .live-transcript-original { margin: 0; color: #263a2f; font-size: 17px; line-height: 1.8; overflow-wrap: anywhere; }
-.live-transcript-current { color: #28744d; }
-.transcript-pending { opacity: 0.72; border-style: dashed; }
+.transcript-paragraph { padding: 4px 2px 18px; border-bottom: 1px solid #edf0ed; animation: rise .25s ease-out both; }
+.transcript-paragraph:last-child { border-bottom: 0; padding-bottom: 0; }
+.transcript-paragraph-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.transcript-paragraph-label { color: #6f8376; font-size: 11px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
+.transcript-paragraph-body { margin: 0; color: #24362c; font-size: 19px; line-height: 1.7; overflow-wrap: anywhere; }
+.transcript-es-phrase { color: #2a5f45; }
+.transcript-en-gloss { color: #6a7d70; font-size: 0.92em; }
 .transcript-typing-dots { display: inline-flex; width: 48px; align-items: center; justify-content: space-between; margin-left: 9px; vertical-align: middle; }
 .transcript-typing-dots i { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: currentColor; opacity: .35; animation: transcript-dot-bounce .42s ease-in-out infinite alternate; }
 .transcript-typing-dots i:nth-child(2) { animation-delay: -.32s; }
@@ -261,7 +266,7 @@ svg { display: block; }
 .download-button:hover { transform: translateY(-2px); background: #f2f8f1; box-shadow: 0 7px 13px rgba(31,79,52,.11); }
 .download-button:disabled { cursor: wait; opacity: .55; }
 .session-transcript-lines { max-height: 620px; overflow: auto; border-top: 1px solid #edf1ed; scroll-behavior: smooth; }
-.session-transcript-row .transcript-item { margin: 0; border: 0; border-bottom: 1px solid #edf1ed; border-radius: 0; box-shadow: none; }
+.session-transcript-row .transcript-paragraph { margin: 0; padding: 16px 18px; border: 0; border-bottom: 1px solid #edf1ed; border-radius: 0; box-shadow: none; }
 .session-empty-lines { margin: 0; padding: 22px; color: #78867d; font-size: 14px; }
 .transcript-export-feedback { margin: 0; padding: 10px 21px; border-bottom: 1px solid #e3ece3; color: #26724c; background: #f3f8f2; font-size: 12px; }
 .settings-dialog { width: min(410px, calc(100vw - 40px)); padding: 0; border: 1px solid #e2e8e2; border-radius: 7px; color: var(--ink); box-shadow: 0 24px 90px rgba(30,49,37,.24); }

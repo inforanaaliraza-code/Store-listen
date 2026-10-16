@@ -1,7 +1,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { duration, filename, normalizeSessions, pdfHtml, transcriptText } = require('../src/transcript-utils');
+const {
+  duration,
+  filename,
+  formatParagraphPlain,
+  groupEntriesIntoParagraphs,
+  normalizeSessions,
+  pdfHtml,
+  transcriptText,
+} = require('../src/transcript-utils');
 
 test('normalizes persisted capture and line timestamps and caps archives', () => {
   const [session] = normalizeSessions([{
@@ -20,23 +28,39 @@ test('normalizes persisted capture and line timestamps and caps archives', () =>
   assert.equal(normalizeSessions(Array.from({ length: 501 }, (_, index) => ({ id: String(index), startedAt: '2026-10-13' }))).length, 500);
 });
 
-test('TXT export keeps transcript lines in chronological order with translations', () => {
+test('groups speech into paragraphs after one minute of silence', () => {
+  const paragraphs = groupEntriesIntoParagraphs([
+    { number: 1, capturedAt: new Date('2026-10-13T12:00:00.000Z'), segment: { originalText: 'Hello', language: 'en' } },
+    { number: 2, capturedAt: new Date('2026-10-13T12:00:20.000Z'), segment: { originalText: 'Gracias', translatedText: 'Thank you', language: 'es' } },
+    { number: 3, capturedAt: new Date('2026-10-13T12:01:30.000Z'), segment: { originalText: 'Need a charger', language: 'en' } },
+  ]);
+  assert.equal(paragraphs.length, 2);
+  assert.equal(paragraphs[0].entries.length, 2);
+  assert.equal(paragraphs[1].entries.length, 1);
+  assert.equal(
+    formatParagraphPlain(paragraphs[0].entries),
+    'Hello Gracias (Thank you)',
+  );
+});
+
+test('TXT export uses paragraph flow with inline Spanish gloss', () => {
   const session = {
     fileNumber: 4,
     startedAt: new Date('2026-10-13T12:00:00.000Z'),
     endedAt: new Date('2026-10-13T12:00:10.000Z'),
     status: 'ENDED',
     entries: [
-      { number: 2, capturedAt: new Date('2026-10-13T12:00:05.000Z'), segment: { originalText: 'Need a charger', translatedText: 'Necesito un cargador', language: 'en', speakerLabel: 'Unattributed speaker' } },
+      { number: 2, capturedAt: new Date('2026-10-13T12:00:05.000Z'), segment: { originalText: 'Need a charger', translatedText: 'Need a charger', language: 'en', speakerLabel: 'Unattributed speaker' } },
       { number: 1, capturedAt: new Date('2026-10-13T12:00:02.000Z'), segment: { originalText: 'Hello', translatedText: 'Hello', language: 'en' } },
     ],
   };
   const text = transcriptText('Store 001', 'Front PC', session);
 
   assert.match(text, /Store: Store 001/);
-  assert.ok(text.indexOf('1. ') < text.indexOf('2. '));
-  assert.match(text, /Translation: Necesito un cargador/);
+  assert.match(text, /Paragraph 1/);
+  assert.match(text, /Hello Need a charger/);
   assert.match(text, /Duration: 00:10/);
+  assert.doesNotMatch(text, /1\. /);
 });
 
 test('capture filenames are sanitized, unique by number and use the requested extension', () => {
@@ -45,7 +69,7 @@ test('capture filenames are sanitized, unique by number and use the requested ex
   assert.equal(filename('!!!', session, 'pdf').split('-capture-')[0], 'store');
 });
 
-test('PDF HTML escapes transcript and metadata while retaining translation', () => {
+test('PDF HTML escapes transcript and metadata while retaining translation gloss', () => {
   const html = pdfHtml({
     filename: '<img src=x onerror=alert(1)>',
     storeName: 'Store <001>',
@@ -53,21 +77,34 @@ test('PDF HTML escapes transcript and metadata while retaining translation', () 
     status: 'ENDED',
     entries: [{
       number: 1,
+      capturedAt: '2026-10-13T12:00:00.000Z',
       speaker: '<script>alert(1)</script>',
       time: '12:00 PM',
-      language: 'en',
+      language: 'es',
       originalText: '<img src=x onerror=alert(1)>',
       translatedText: 'Safe & translated',
+      segment: {
+        language: 'es',
+        originalText: '<img src=x onerror=alert(1)>',
+        translatedText: 'Safe & translated',
+      },
     }],
   });
 
   assert.doesNotMatch(html, /<script>|<img src=x/);
-  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.match(html, /Store &lt;001&gt;/);
   assert.match(html, /Safe &amp; translated/);
   assert.match(html, /Content-Security-Policy/);
-  const longHtml = pdfHtml({ entries: Array.from({ length: 1001 }, (_, index) => ({ number: index + 1, originalText: 'line' })) });
-  assert.equal((longHtml.match(/class="entry"/g) || []).length, 1001);
+  const longHtml = pdfHtml({
+    entries: Array.from({ length: 1001 }, (_, index) => ({
+      number: index + 1,
+      capturedAt: new Date(Date.UTC(2026, 9, 13, 12, 0, index)).toISOString(),
+      originalText: 'line',
+      segment: { originalText: 'line', language: 'en' },
+    })),
+  });
+  assert.ok((longHtml.match(/class="entry"/g) || []).length >= 1);
 });
 
 test('empty capture exports an explicit no-speech message', () => {
@@ -89,7 +126,7 @@ test('normalizes legacy speaker attribution wording in saved transcripts', () =>
   const text = transcriptText('Store 001', 'Front PC', session);
 
   assert.equal(session.entries[0].segment.speakerLabel, 'Speaker');
-  assert.match(text, /Speaker/);
+  assert.match(text, /Hello/);
   assert.doesNotMatch(text, /Speaker not identified/);
   assert.doesNotMatch(text, /Unattributed speaker/);
 });

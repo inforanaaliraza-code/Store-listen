@@ -338,7 +338,7 @@ function setCaptureUi(recording, busy = false, ended = false) {
   if (indicator) indicator.textContent = recording ? 'LIVE' : busy ? 'SAVING' : ended ? 'ENDED' : 'READY';
   $('#captureTitle').textContent = recording ? 'Listening' : busy ? 'Saving…' : ended ? 'Session saved' : 'Ready to capture';
   $('#captureMessage').textContent = recording
-    ? 'English & Spanish lines appear as you speak.'
+    ? 'Clear English & Spanish speech flows into paragraphs as you speak.'
     : busy ? 'Finishing uploads…' : ended ? 'Start again for the next conversation.' : 'Pick a mic and start.';
   $('#captureButtonLabel').textContent = recording ? 'Stop' : busy ? 'Saving…' : 'Start';
   $('#captureButton').classList.toggle('stopping', recording);
@@ -349,42 +349,40 @@ function setCaptureUi(recording, busy = false, ended = false) {
   else $('#captureButtonIcon').innerHTML = '<path d="M12 3v12M8 7v7a4 4 0 0 0 8 0V7M5 12a7 7 0 0 0 14 0M12 19v3M9 22h6"/>';
 }
 
-function createTranscriptItem(segment, capturedAt, number) {
+function createParagraphBlock(paragraph, index) {
   const item = document.createElement('article');
-  item.className = 'transcript-item';
-  const index = document.createElement('span');
-  index.className = 'transcript-number';
-  index.textContent = String(number).padStart(2, '0');
-  item.append(index);
-  const meta = document.createElement('div');
-  meta.className = 'transcript-meta';
-  const speaker = document.createElement('span');
-  speaker.className = 'transcript-speaker';
-  speaker.textContent = normalizeSpeakerLabel(segment.speakerLabel);
+  item.className = 'transcript-paragraph';
+  const meta = document.createElement('header');
+  meta.className = 'transcript-paragraph-meta';
+  const label = document.createElement('span');
+  label.className = 'transcript-paragraph-label';
+  label.textContent = `Paragraph ${String(index + 1).padStart(2, '0')}`;
   const time = document.createElement('time');
   time.className = 'transcript-time';
-  time.textContent = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(capturedAt);
-  meta.append(speaker, time);
-  if (Number.isFinite(segment.transcriptionMs)) {
-    const latency = document.createElement('span');
-    latency.className = 'transcript-latency';
-    latency.textContent = `STT ${(segment.transcriptionMs / 1000).toFixed(1)}s`;
-    meta.append(latency);
-  }
-  const original = document.createElement('p');
-  original.className = 'transcript-original';
-  original.textContent = segment.originalText || 'No speech detected.';
-  item.append(meta, original);
-  if (segment.translatedText && segment.translatedText !== segment.originalText) {
-    const translation = document.createElement('p');
-    translation.className = 'transcript-translation';
-    translation.textContent = `EN: ${segment.translatedText}`;
-    item.append(translation);
-  }
-  const language = document.createElement('span');
-  language.className = 'transcript-language';
-  language.textContent = (segment.language || 'und').toUpperCase();
-  item.append(language);
+  time.textContent = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric', minute: '2-digit', second: '2-digit',
+  }).format(new Date(paragraph.startedAt));
+  meta.append(label, time);
+  const body = document.createElement('p');
+  body.className = 'transcript-paragraph-body';
+  const parts = transcriptTools.paragraphParts(paragraph.entries);
+  parts.forEach((part, partIndex) => {
+    if (partIndex > 0) body.append(document.createTextNode(' '));
+    if (part.kind === 'es') {
+      const phrase = document.createElement('span');
+      phrase.className = 'transcript-es-phrase';
+      phrase.append(document.createTextNode(part.original));
+      const gloss = document.createElement('span');
+      gloss.className = 'transcript-en-gloss';
+      gloss.textContent = ` (${part.translation})`;
+      phrase.append(gloss);
+      body.append(phrase);
+    } else {
+      body.append(document.createTextNode(part.original));
+    }
+  });
+  if (!parts.length) body.textContent = 'No speech detected.';
+  item.append(meta, body);
   return item;
 }
 
@@ -412,15 +410,13 @@ async function downloadTranscript(session, format) {
       status: session.status,
       entries: session.entries.slice().sort((left, right) => left.number - right.number).map((entry) => ({
         number: entry.number,
+        capturedAt: entry.capturedAt,
         time: entry.capturedAt.toLocaleTimeString(),
-        speaker: !entry.segment.speakerLabel
-          || entry.segment.speakerLabel === 'Speaker not identified'
-          || entry.segment.speakerLabel === 'Unattributed speaker'
-          ? 'Speaker'
-          : entry.segment.speakerLabel,
+        speaker: normalizeSpeakerLabel(entry.segment.speakerLabel),
         language: entry.segment.language || 'und',
         originalText: entry.segment.originalText || 'No speech recognized.',
         translatedText: entry.segment.translatedText || '',
+        segment: entry.segment,
       })),
     });
     return Boolean(result?.saved);
@@ -473,7 +469,7 @@ function renderTranscriptArchive() {
       const title = document.createElement('h2');
       title.textContent = `Capture ${String(session.fileNumber).padStart(3, '0')}`;
       const subtitle = document.createElement('p');
-      subtitle.textContent = `${session.startedAt.toLocaleString()} · ${session.entries.length} transcript lines · ${captureDuration(session)}`;
+          subtitle.textContent = `${session.startedAt.toLocaleString()} · ${transcriptTools.groupEntriesIntoParagraphs(session.entries).length} paragraphs · ${captureDuration(session)}`;
       details.append(title, subtitle);
       const status = document.createElement('span');
       status.className = `session-status${session.status === 'LIVE' ? ' live' : ''}`;
@@ -510,16 +506,16 @@ function renderTranscriptArchive() {
       transcript.id = `archive-lines-${session.fileNumber}`;
       transcript.hidden = !expanded;
       if (entries.length) {
-        entries.slice().reverse().forEach((entry) => {
+        transcriptTools.groupEntriesIntoParagraphs(entries).forEach((paragraph, index) => {
           const row = document.createElement('div');
           row.className = 'session-transcript-row';
-          row.append(createTranscriptItem(entry.segment, entry.capturedAt, entry.number));
+          row.append(createParagraphBlock(paragraph, index));
           transcript.append(row);
         });
       } else if (expanded) {
         const empty = document.createElement('p');
         empty.className = 'session-empty-lines';
-        empty.textContent = session.entries.length ? 'No lines match this search.' : 'No speech recognized in this capture.';
+        empty.textContent = session.entries.length ? 'No paragraphs match this search.' : 'No speech recognized in this capture.';
         transcript.append(empty);
       }
       card.append(transcript);
@@ -529,7 +525,7 @@ function renderTranscriptArchive() {
   list.replaceChildren(fragment);
 }
 
-function renderLiveTranscript(session, partialText = '', isTranscribing = false) {
+function renderLiveTranscript(session) {
   const list = $('#transcriptList');
   const empty = $('#emptyTranscript');
   if (empty) empty.remove();
@@ -541,21 +537,9 @@ function renderLiveTranscript(session, partialText = '', isTranscribing = false)
     list.replaceChildren(linesHost);
   }
   const fragment = document.createDocumentFragment();
-  session.entries.forEach((entry) => {
-    fragment.append(createTranscriptItem(entry.segment, entry.capturedAt, entry.number));
+  transcriptTools.groupEntriesIntoParagraphs(session.entries).forEach((paragraph, index) => {
+    fragment.append(createParagraphBlock(paragraph, index));
   });
-  if (partialText || isTranscribing) {
-    const pending = document.createElement('article');
-    pending.className = 'transcript-item transcript-pending';
-    const meta = document.createElement('div');
-    meta.className = 'transcript-meta';
-    meta.textContent = isTranscribing ? 'Transcribing…' : 'Listening…';
-    const text = document.createElement('p');
-    text.className = 'transcript-original live-transcript-current';
-    text.textContent = partialText || 'Capturing speech…';
-    pending.append(meta, text);
-    fragment.append(pending);
-  }
   linesHost.replaceChildren(fragment);
   list.scrollTop = list.scrollHeight;
 }
@@ -567,15 +551,32 @@ function normalizeSpeakerLabel(label) {
 
 const CLIENT_JUNK_EXACT = new Set([
   'tchau', 'chao', 'obrigado', 'obrigada', 'adeus', 'valeu', 'ciao',
+  'e ai', 'ai', 'ei', 'oie', 'opa',
   'thank you', 'thanks', 'bye', 'goodbye', 'okay', 'ok', 'hmm', 'uh', 'um', 'yeah',
 ]);
+const CLIENT_ALLOWED_SHORT = new Set([
+  'hola', 'gracias', 'adios', 'si', 'no', 'hello', 'hi', 'yes', 'please', 'sorry', 'help',
+]);
+
+function normalizeClientPhrase(text) {
+  return (text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 function isClientJunkTranscript(text) {
-  const phrase = (text || '').toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const phrase = normalizeClientPhrase(text);
   if (!phrase) return true;
   if (CLIENT_JUNK_EXACT.has(phrase)) return true;
   const words = phrase.split(' ').filter(Boolean);
-  if (words.length === 1 && words[0].length <= 6 && !['hola', 'gracias', 'adios', 'adiós', 'si', 'sí', 'no', 'hello', 'hi', 'yes', 'please', 'sorry', 'help'].includes(words[0])) {
+  if (words.length === 1 && words[0].length <= 6 && !CLIENT_ALLOWED_SHORT.has(words[0])) {
+    return true;
+  }
+  if (words.length <= 2 && words.every((word) => word.length <= 3) && !words.some((word) => CLIENT_ALLOWED_SHORT.has(word))) {
     return true;
   }
   return false;
@@ -631,22 +632,8 @@ async function waitForUploadSlot(capture) {
   }
 }
 
-function showPendingTranscript(capture, sequence) {
-  const pendingId = `pending-${sequence}`;
-  if (capture.pendingIds?.has(pendingId)) return;
-  capture.pendingIds = capture.pendingIds || new Set();
-  capture.pendingIds.add(pendingId);
-  renderLiveTranscript(capture.session, `Transcribing clip ${sequence}…`, true);
-  $('#captureMessage').textContent = 'Speech captured — cloud transcription usually finishes in a few seconds.';
-}
-
-function clearPendingTranscript(capture, sequence) {
-  capture.pendingIds?.delete(`pending-${sequence}`);
-}
-
 async function uploadSegment(capture, blob, sequence, offset, duration) {
   if (!blob.size) return;
-  showPendingTranscript(capture, sequence);
   const uploadStartedAt = performance.now();
   const response = await window.storeListen.uploadAudio({
     apiBase: state.config.apiBase,
@@ -664,7 +651,6 @@ async function uploadSegment(capture, blob, sequence, offset, duration) {
       session_offset_seconds: Math.max(0, offset),
     },
   });
-  clearPendingTranscript(capture, sequence);
   setHidden('#liveTranscriptPreview', true);
   setText('#liveTranscriptPreviewText', '');
   if (response.segment) addTranscript({
@@ -675,7 +661,6 @@ async function uploadSegment(capture, blob, sequence, offset, duration) {
   });
   else {
     capture.latestPreviewText = '';
-    renderLiveTranscript(capture.session);
     if (response.analysis_status === 'unsupported_language') {
       showError($('#captureError'), 'Only English and Spanish are transcribed. Other languages are ignored.');
     } else if (response.analysis_status === 'no_speech') {
@@ -697,7 +682,6 @@ function enqueueUpload(capture, blob, sequence, offset, duration) {
       capture.activeUploads = Math.max(0, (capture.activeUploads || 1) - 1);
     }
   })().catch(async (error) => {
-    clearPendingTranscript(capture, sequence);
     if (await returnToDeviceActivation(error)) return;
     showError($('#captureError'), `${error.message} Capture is pausing so audio is not silently lost.`);
     capture.requested = false;
@@ -758,11 +742,7 @@ function beginRecorder(capture) {
             preview_sequence: previewSequence,
           },
         });
-        const partialText = response.segment?.originalText || response.segment?.translatedText;
-        if (partialText && capture.requested && capture.recorder === recorder) {
-          capture.latestPreviewText = partialText;
-          renderLiveTranscript(capture.session, partialText, true);
-        }
+        // Live previews stay off the transcript pane — finals keep the conversation clean.
       } catch {
         // Final transcription remains authoritative if a provisional preview fails.
       } finally {
@@ -808,9 +788,8 @@ function monitorVoice(capture) {
     const energyStart = !capture.speaking && voiceDetection.shouldVoiceTrigger?.(samples);
     if (result.state === 'start' || energyStart) {
       capture.speaking = true;
-      renderLiveTranscript(capture.session, capture.latestPreviewText || '', true);
       $('#captureTitle').textContent = 'Voice detected';
-      $('#captureMessage').textContent = 'Capturing this phrase now; the same line will appear on the dashboard immediately after transcription.';
+      $('#captureMessage').textContent = 'Clear speech will join the current paragraph after transcription.';
       sendHealth({ speaking: true });
       beginRecorder(capture);
     } else if (result.state === 'end') {
@@ -944,7 +923,6 @@ async function startCaptureSession() {
       uploadQueue: Promise.resolve(),
       inflightUploads: new Set(),
       activeUploads: 0,
-      pendingIds: new Set(),
       sequence: 0,
       offset: 0,
       startedAt: Date.now(),
