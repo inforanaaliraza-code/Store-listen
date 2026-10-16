@@ -34,6 +34,9 @@ const state = {
   clockTimer: null,
   reactivationPromise: null,
   captureRetryTimer: null,
+  approvalStatus: 'unknown',
+  approvalTimer: null,
+  waveformFrame: 0,
 };
 
 function showError(element, message) {
@@ -108,8 +111,10 @@ async function returnToDeviceActivation(error) {
     window.clearInterval(state.apiTimer);
     window.clearInterval(state.clockTimer);
     window.clearInterval(state.healthTimer);
+    window.clearInterval(state.approvalTimer);
     window.clearTimeout(state.reconnectTimer);
     window.clearInterval(state.setupHealthTimer);
+    state.approvalStatus = 'unknown';
     if (state.healthSocket) {
       const socket = state.healthSocket;
       state.healthSocket = null;
@@ -221,7 +226,7 @@ function showWorkspace(config) {
   connectHealth();
   state.apiTimer = window.setInterval(checkApi, 20_000);
   state.clockTimer = window.setInterval(updateSessionClock, 1000);
-  void startCapture();
+  void beginApprovedCapture();
 }
 
 function setDeviceStatus(online) {
@@ -331,22 +336,103 @@ function connectHealth() {
   }
 }
 
+function setApprovalBanner(status) {
+  const banner = $('#approvalBanner');
+  if (!banner) return;
+  if (status === 'approved') {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  if (status === 'rejected') {
+    banner.textContent = 'This device was rejected by an admin. Re-register after they clear the request.';
+  } else {
+    banner.textContent = 'Waiting for admin approval before this device can start listening.';
+  }
+}
+
+async function refreshApprovalStatus() {
+  if (!state.config?.deviceId) return state.approvalStatus;
+  try {
+    const result = await request(`/api/v1/devices/${encodeURIComponent(state.config.deviceId)}/approval`);
+    state.approvalStatus = result.approved ? 'approved' : (result.approval_status || 'pending');
+  } catch {
+    // Keep last known status when the approval check fails briefly.
+  }
+  setApprovalBanner(state.approvalStatus);
+  const blocked = state.approvalStatus !== 'approved';
+  if (blocked && !state.capture) {
+    $('#captureButton').disabled = true;
+    $('#captureTitle').textContent = state.approvalStatus === 'rejected' ? 'Approval rejected' : 'Awaiting approval';
+    $('#captureMessage').textContent = state.approvalStatus === 'rejected'
+      ? 'Ask an admin to approve this store device, then restart capture.'
+      : 'Recording stays off until an admin approves this store in the web portal.';
+  }
+  return state.approvalStatus;
+}
+
+function startApprovalPolling() {
+  window.clearInterval(state.approvalTimer);
+  const tick = () => {
+    void (async () => {
+      const previous = state.approvalStatus;
+      const status = await refreshApprovalStatus();
+      if (previous !== 'approved' && status === 'approved' && state.config && !state.capture) {
+        void startCapture();
+      }
+    })();
+  };
+  // Fast poll while waiting so recording starts as soon as admin approves.
+  state.approvalTimer = window.setInterval(tick, 3_000);
+}
+
+async function beginApprovedCapture() {
+  const status = await refreshApprovalStatus();
+  startApprovalPolling();
+  if (status === 'approved') void startCapture();
+}
+
+function updateMicWaveform(samples, speaking) {
+  const bars = $('#micWaveform')?.querySelectorAll('i');
+  if (!bars?.length) return;
+  let sum = 0;
+  for (let index = 0; index < samples.length; index += 8) sum += samples[index] * samples[index];
+  const rms = Math.sqrt(sum / Math.max(1, Math.floor(samples.length / 8)));
+  const level = Math.min(1, rms * 12);
+  bars.forEach((bar, index) => {
+    const weight = 0.35 + ((index % 4) * 0.18);
+    const height = 4 + Math.round((speaking ? Math.max(level, 0.22) : level) * weight * 18);
+    bar.style.height = `${height}px`;
+  });
+}
+
+function resetMicWaveform() {
+  const bars = $('#micWaveform')?.querySelectorAll('i');
+  bars?.forEach((bar) => { bar.style.height = '4px'; });
+}
+
 function setCaptureUi(recording, busy = false, ended = false) {
   const hero = $('#captureHero');
   if (hero) hero.classList.toggle('recording', recording);
   const indicator = $('#captureIndicator span');
   if (indicator) indicator.textContent = recording ? 'LIVE' : busy ? 'SAVING' : ended ? 'ENDED' : 'READY';
-  $('#captureTitle').textContent = recording ? 'Listening' : busy ? 'Saving…' : ended ? 'Session saved' : 'Ready to capture';
-  $('#captureMessage').textContent = recording
-    ? 'Clear English & Spanish speech flows into paragraphs as you speak.'
-    : busy ? 'Finishing uploads…' : ended ? 'Start again for the next conversation.' : 'Pick a mic and start.';
+  const awaitingApproval = state.approvalStatus !== 'approved' && state.approvalStatus !== 'unknown';
+  $('#captureTitle').textContent = awaitingApproval && !recording
+    ? (state.approvalStatus === 'rejected' ? 'Approval rejected' : 'Awaiting approval')
+    : recording ? 'Listening' : busy ? 'Saving…' : ended ? 'Session saved' : 'Ready to capture';
+  $('#captureMessage').textContent = awaitingApproval && !recording
+    ? 'Recording stays off until an admin approves this store in the web portal.'
+    : recording
+      ? 'Microphone is active. Conversation text appears in English.'
+      : busy ? 'Finishing uploads…' : ended ? 'Start again for the next conversation.' : 'Pick a mic and start.';
   $('#captureButtonLabel').textContent = recording ? 'Stop' : busy ? 'Saving…' : 'Start';
   $('#captureButton').classList.toggle('stopping', recording);
-  $('#captureButton').disabled = busy;
+  $('#captureButton').disabled = busy || (awaitingApproval && !recording);
   $('#microphoneSelect').disabled = recording || busy;
   $('#deliveryStat').innerHTML = recording ? '<i class="stat-dot"></i>Live' : ended ? '<i class="stat-dot"></i>Ended' : '<i class="stat-dot"></i>Ready';
   if (recording) $('#captureButtonIcon').innerHTML = '<rect x="6" y="6" width="12" height="12" rx="1"/>';
   else $('#captureButtonIcon').innerHTML = '<path d="M12 3v12M8 7v7a4 4 0 0 0 8 0V7M5 12a7 7 0 0 0 14 0M12 19v3M9 22h6"/>';
+  if (!recording) resetMicWaveform();
 }
 
 function createParagraphBlock(paragraph, index) {
@@ -363,26 +449,24 @@ function createParagraphBlock(paragraph, index) {
     hour: 'numeric', minute: '2-digit', second: '2-digit',
   }).format(new Date(paragraph.startedAt));
   meta.append(label, time);
-  const body = document.createElement('p');
-  body.className = 'transcript-paragraph-body';
+
+  // Spec: always show English in the live conversation box (Spanish audio → English text).
   const parts = transcriptTools.paragraphParts(paragraph.entries);
-  parts.forEach((part, partIndex) => {
-    if (partIndex > 0) body.append(document.createTextNode(' '));
-    if (part.kind === 'es') {
-      const phrase = document.createElement('span');
-      phrase.className = 'transcript-es-phrase';
-      phrase.append(document.createTextNode(part.original));
-      const gloss = document.createElement('span');
-      gloss.className = 'transcript-en-gloss';
-      gloss.textContent = ` (${part.translation})`;
-      phrase.append(gloss);
-      body.append(phrase);
-    } else {
-      body.append(document.createTextNode(part.original));
-    }
-  });
-  if (!parts.length) body.textContent = 'No speech detected.';
-  item.append(meta, body);
+  const englishBody = document.createElement('p');
+  englishBody.className = 'transcript-paragraph-body';
+  const englishText = parts.map((part) => (
+    part.kind === 'es' ? (part.translation || part.original) : part.original
+  )).join(' ').trim();
+  englishBody.textContent = englishText || 'No speech detected.';
+  item.append(meta, englishBody);
+
+  const spokenPlain = transcriptTools.formatParagraphSpoken(paragraph.entries);
+  if (spokenPlain && spokenPlain !== englishText && parts.some((part) => part.kind === 'es')) {
+    const original = document.createElement('p');
+    original.className = 'transcript-paragraph-original';
+    original.textContent = `ES: ${spokenPlain}`;
+    item.append(original);
+  }
   return item;
 }
 
@@ -553,6 +637,7 @@ const CLIENT_JUNK_EXACT = new Set([
   'tchau', 'chao', 'obrigado', 'obrigada', 'adeus', 'valeu', 'ciao',
   'e ai', 'ai', 'ei', 'oie', 'opa',
   'thank you', 'thanks', 'bye', 'goodbye', 'okay', 'ok', 'hmm', 'uh', 'um', 'yeah',
+  'terima kasih', 'terima kasih telah menonton',
 ]);
 const CLIENT_ALLOWED_SHORT = new Set([
   'hola', 'gracias', 'adios', 'si', 'no', 'hello', 'hi', 'yes', 'please', 'sorry', 'help',
@@ -572,6 +657,9 @@ function isClientJunkTranscript(text) {
   const phrase = normalizeClientPhrase(text);
   if (!phrase) return true;
   if (CLIENT_JUNK_EXACT.has(phrase)) return true;
+  if (phrase.includes('terima kasih') || phrase.includes('menonton') || phrase.includes('thanks for watching')) {
+    return true;
+  }
   const words = phrase.split(' ').filter(Boolean);
   if (words.length === 1 && words[0].length <= 6 && !CLIENT_ALLOWED_SHORT.has(words[0])) {
     return true;
@@ -782,6 +870,7 @@ function monitorVoice(capture) {
     if (!capture.requested) return;
     capture.analyser.getFloatTimeDomainData(samples);
     capture.analyser.getFloatFrequencyData(spectrum);
+    updateMicWaveform(samples, capture.speaking);
     const result = gate
       ? gate.observe(samples, spectrum, capture.audioContext.sampleRate, performance.now())
       : { state: (voiceDetection.shouldVoiceTrigger?.(samples) ? 'start' : 'idle') };
@@ -789,11 +878,13 @@ function monitorVoice(capture) {
     if (result.state === 'start' || energyStart) {
       capture.speaking = true;
       $('#captureTitle').textContent = 'Voice detected';
-      $('#captureMessage').textContent = 'Clear speech will join the current paragraph after transcription.';
+      $('#captureMessage').textContent = 'Microphone is active. Clear speech joins the English conversation after transcription.';
+      setMicrophoneStatus('Microphone is active', 'ok');
       sendHealth({ speaking: true });
       beginRecorder(capture);
     } else if (result.state === 'end') {
       capture.speaking = false;
+      setMicrophoneStatus('Microphone is active', 'ok');
       sendHealth({ speaking: false });
       if (capture.recorder?.state === 'recording') {
         const elapsed = Date.now() - (capture.segmentStartedAt || Date.now());
@@ -846,6 +937,14 @@ async function stopCapture() {
 async function startCapture() {
   if (state.capture) return;
   if (state.captureStartPromise) return state.captureStartPromise;
+  const approval = await refreshApprovalStatus();
+  if (approval !== 'approved') {
+    setCaptureUi(false);
+    showError($('#captureError'), approval === 'rejected'
+      ? 'This device was rejected. Ask an admin to approve a new registration.'
+      : 'This device is waiting for admin approval. Recording cannot start yet.');
+    return;
+  }
   const starting = startCaptureSession();
   state.captureStartPromise = starting;
   try {
@@ -898,9 +997,9 @@ async function startCaptureSession() {
     liveEmpty.className = 'empty-transcript';
     liveEmpty.id = 'emptyTranscript';
     const liveTitle = document.createElement('strong');
-    liveTitle.textContent = 'Listening for English or Spanish';
+    liveTitle.textContent = 'Listening — English transcript';
     const liveNote = document.createElement('span');
-    liveNote.textContent = 'Each phrase appears as its own line. Spanish lines include an English translation for staff.';
+    liveNote.textContent = 'Speech appears in English. After one minute of silence, a new paragraph starts.';
     liveEmpty.append(liveTitle, liveNote);
     $('#transcriptList').replaceChildren(liveEmpty);
     $('#navTranscriptCount').textContent = String(state.sessions.length);
@@ -931,7 +1030,7 @@ async function startCaptureSession() {
     };
     window.clearTimeout(state.captureRetryTimer);
     setCaptureUi(true);
-    setMicrophoneStatus('Active', 'ok');
+    setMicrophoneStatus('Microphone is active', 'ok');
     monitorVoice(state.capture);
     sendHealth({ speaking: false });
   } catch (error) {
@@ -940,12 +1039,20 @@ async function startCaptureSession() {
     state.capture = null;
     setCaptureUi(false);
     window.clearTimeout(state.captureRetryTimer);
-    state.captureRetryTimer = window.setTimeout(() => {
-      if (state.config && !state.capture) void startCapture();
-    }, 4000);
-    setMicrophoneStatus('Permission needed', 'bad');
+    const blockedApproval = /awaiting admin approval|approval/i.test(String(error?.message || ''));
+    if (!blockedApproval) {
+      state.captureRetryTimer = window.setTimeout(() => {
+        if (state.config && !state.capture && state.approvalStatus === 'approved') void startCapture();
+      }, 4000);
+    } else {
+      state.approvalStatus = 'pending';
+      setApprovalBanner('pending');
+    }
+    setMicrophoneStatus(blockedApproval ? 'Awaiting approval' : 'Permission needed', 'bad');
     const message = error instanceof Error ? error.message : '';
-    if (error?.name === 'OverconstrainedError' || error?.name === 'ConstraintNotSatisfiedError') {
+    if (blockedApproval) {
+      showError($('#captureError'), 'This device is waiting for admin approval. Recording cannot start yet.');
+    } else if (error?.name === 'OverconstrainedError' || error?.name === 'ConstraintNotSatisfiedError') {
       showError($('#captureError'), 'The selected microphone is unavailable. Choose another input or use Default microphone.');
     } else if (error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError' || error?.name === 'SecurityError') {
       showError($('#captureError'), 'Microphone access was denied. Allow microphone access in Windows privacy settings, then restart capture.');
@@ -957,7 +1064,7 @@ async function startCaptureSession() {
       showError($('#captureError'), message || 'Could not start microphone capture. Check Windows privacy settings and API availability.');
     }
   } finally {
-    $('#captureButton').disabled = false;
+    if (state.approvalStatus === 'approved') $('#captureButton').disabled = false;
   }
 }
 
@@ -1053,7 +1160,19 @@ window.storeListen.onCaptureStopRequested(async () => {
 });
 
 window.storeListen.onWindowOpened(() => {
-  if (state.config) void startCapture();
+  if (state.config) void beginApprovedCapture();
+});
+
+window.storeListen.onSystemSuspend(async () => {
+  showError($('#captureError'), 'Computer sleep detected — stopping capture and syncing to the server.');
+  if (state.capture) await stopCapture();
+});
+
+window.storeListen.onSystemResume(() => {
+  if (state.config && !state.capture && state.approvalStatus === 'approved') {
+    showError($('#captureError'), '');
+    void startCapture();
+  }
 });
 
 $('#settingsButton').addEventListener('click', async () => {

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, session, Tray } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, safeStorage, session, Tray } = require('electron');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -317,6 +317,18 @@ if (!hasSingleInstanceLock) {
     createTray();
     Menu.setApplicationMenu(null);
     app.on('activate', () => mainWindow?.show());
+    // Spec: shutdown/sleep must safely stop recording and sync to the server.
+    powerMonitor.on('suspend', () => {
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+      mainWindow.webContents.send('system-suspend');
+    });
+    powerMonitor.on('resume', () => {
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+      mainWindow.webContents.send('system-resume');
+    });
+    powerMonitor.on('shutdown', () => {
+      requestCaptureStop('quit');
+    });
   });
 }
 

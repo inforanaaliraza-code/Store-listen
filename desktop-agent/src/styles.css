@@ -153,7 +153,7 @@ svg { display: block; }
 .capture-bar.recording .live-indicator { color: #a05a3e; border-color: #f0ddd3; background: #fff9f5; }
 .capture-bar.recording .live-indicator i { background: #cf7755; box-shadow: 0 0 0 3px rgba(207,119,85,.12); animation: pulse 1.8s ease-in-out infinite; }
 .capture-session { flex: 0 0 auto; color: #87938b; font-size: 13px; font-variant-numeric: tabular-nums; font-weight: 650; }
-.capture-mic-status { display: flex; min-width: 0; flex-direction: column; gap: 2px; color: #52645a; font-size: 11px; }
+.capture-mic-status { display: flex; min-width: 0; flex-direction: column; gap: 4px; color: #52645a; font-size: 11px; }
 .capture-mic-status strong, .capture-mic-status small { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .capture-mic-status small { color: #859188; font-size: 10px; }
 .mic-select { display: flex; min-width: 120px; flex: 1; flex-direction: column; gap: 3px; color: #829087; font-size: 9px; font-weight: 750; letter-spacing: .7px; }
@@ -187,8 +187,11 @@ svg { display: block; }
 .transcript-paragraph-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .transcript-paragraph-label { color: #6f8376; font-size: 11px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
 .transcript-paragraph-body { margin: 0; color: #24362c; font-size: 19px; line-height: 1.7; overflow-wrap: anywhere; }
-.transcript-es-phrase { color: #2a5f45; }
-.transcript-en-gloss { color: #6a7d70; font-size: 0.92em; }
+.transcript-paragraph-original { margin: 8px 0 0; color: #6a7d70; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.mic-waveform { display: flex; align-items: end; gap: 2px; height: 22px; min-width: 56px; }
+.mic-waveform i { width: 3px; border-radius: 2px; background: #98a59b; min-height: 4px; transition: height .08s linear, background .12s ease; }
+.capture-bar.recording .mic-waveform i { background: #cf7755; }
+.approval-banner { margin: 0 0 10px; padding: 10px 12px; border: 1px solid #f0dfc9; border-radius: 6px; color: #8a5a20; background: #fff8ee; font-size: 12px; }
 .transcript-typing-dots { display: inline-flex; width: 48px; align-items: center; justify-content: space-between; margin-left: 9px; vertical-align: middle; }
 .transcript-typing-dots i { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: currentColor; opacity: .35; animation: transcript-dot-bounce .42s ease-in-out infinite alternate; }
 .transcript-typing-dots i:nth-child(2) { animation-delay: -.32s; }

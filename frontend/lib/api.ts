@@ -252,6 +252,8 @@ export type DashboardSummary = {
     offline_stores: number;
     live_conversations: number;
     conversations_today: number;
+    total_conversations?: number;
+    analyzed_conversations?: number;
     potential_missed_opportunities: number;
     sales_opportunities: number;
     converted_opportunities: number;
@@ -259,6 +261,9 @@ export type DashboardSummary = {
     average_response_time_seconds: number | null;
     language_distribution: Record<string, number>;
     conversation_trend: number[];
+    conversation_trend_dates?: string[];
+    missed_by_category?: Record<string, number>;
+    manager_review_required?: number;
     pos_correlated: number;
     sales_count_7d: number;
     revenue_by_currency_7d: Record<string, number>;

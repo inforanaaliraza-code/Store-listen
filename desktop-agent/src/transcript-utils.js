@@ -80,6 +80,14 @@
     return entry || {};
   }
 
+  function looksLikeSpanishText(text) {
+    const value = String(text || '');
+    if (/[¿¡ñáéíóúü]/i.test(value)) return true;
+    const lowered = value.toLowerCase();
+    const hits = ['hola', 'gracias', 'señor', 'senor', 'tenemos', 'producto', 'necesito', 'cuanto', 'cuánto', 'por favor', 'dolares', 'dólares', 'buenos', 'buenas', 'adios', 'adiós'];
+    return hits.filter((token) => lowered.includes(token)).length >= 1;
+  }
+
   function paragraphParts(entries) {
     return (entries || []).map((entry) => {
       const segment = segmentFromEntry(entry);
@@ -87,17 +95,42 @@
       if (!original) return null;
       const translated = String(segment.translatedText || entry.translated || '').trim();
       const language = String(segment.language || entry.language || 'en').toLowerCase();
-      if (language === 'es' && translated && translated !== original) {
-        return { kind: 'es', original, translation: translated };
+      const spanish = language === 'es' || looksLikeSpanishText(original);
+      if (spanish) {
+        const translation = translated && translated !== original && !looksLikeSpanishText(translated)
+          ? translated
+          : '';
+        return { kind: 'es', original, translation };
       }
       return { kind: 'text', original };
     }).filter(Boolean);
   }
 
-  function formatParagraphPlain(entries) {
-    return paragraphParts(entries).map((part) => (
-      part.kind === 'es' ? `${part.original} (${part.translation})` : part.original
+  function formatParagraphSpoken(entries) {
+    return paragraphParts(entries).map((part) => part.original).join(' ');
+  }
+
+  function formatParagraphStaffEnglish(entries) {
+    const parts = paragraphParts(entries);
+    if (!parts.some((part) => part.kind === 'es')) return '';
+    return parts.map((part) => (
+      part.kind === 'es' ? (part.translation || part.original) : part.original
     )).join(' ');
+  }
+
+  function formatParagraphEnglish(entries) {
+    const parts = paragraphParts(entries);
+    return parts.map((part) => (
+      part.kind === 'es' ? (part.translation || part.original) : part.original
+    )).join(' ');
+  }
+
+  function formatParagraphPlain(entries) {
+    // Spec: exports and archives prefer always-English conversation text.
+    const english = formatParagraphEnglish(entries);
+    const spoken = formatParagraphSpoken(entries);
+    if (spoken && spoken !== english) return `${english}\nES: ${spoken}`;
+    return english || spoken;
   }
 
   function formatTime(value) {
@@ -138,7 +171,7 @@
         entries: [entry],
       }));
     const entryMarkup = paragraphs.map((paragraph, index) => {
-      const body = formatParagraphPlain(paragraph.entries.map((entry) => (
+      const mapped = paragraph.entries.map((entry) => (
         entry.segment ? entry : {
           segment: {
             originalText: entry.originalText || entry.original,
@@ -148,18 +181,21 @@
           capturedAt: entry.capturedAt,
           number: entry.number,
         }
-      )));
+      ));
+      const english = formatParagraphEnglish(mapped);
+      const spoken = formatParagraphSpoken(mapped);
       const stamp = typeof paragraph.startedAt === 'number'
         ? formatTime(paragraph.startedAt)
         : escapeHtml(String(paragraph.startedAt || ''));
       return `
     <article class="entry">
       <header><strong>Paragraph ${index + 1}</strong><span>${stamp}</span></header>
-      <p>${escapeHtml(body || 'No speech recognized.')}</p>
+      <p>${escapeHtml(english || spoken || 'No speech recognized.')}</p>
+      ${spoken && spoken !== english ? `<p class="en"><strong>ES</strong> ${escapeHtml(spoken)}</p>` : ''}
     </article>`;
     }).join('');
     return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>
-    *{box-sizing:border-box}body{margin:0;padding:34px;color:#1b2b22;font:12pt/1.55 Arial,sans-serif}h1{margin:0 0 6px;font-size:24pt}h2{margin:0 0 22px;color:#28744d;font-size:11pt;font-weight:600}.meta{margin-bottom:24px;padding:14px 16px;border:1px solid #dce8dd;background:#f5f9f4}.meta p{margin:3px 0}.entry{padding:16px 0;border-top:1px solid #dfe7df;break-inside:avoid}.entry header{display:flex;justify-content:space-between;gap:16px;color:#36714f;font-size:9pt}.entry header span{color:#748178}.entry p{margin:10px 0 0;font-size:13pt;line-height:1.65;overflow-wrap:anywhere}
+    *{box-sizing:border-box}body{margin:0;padding:34px;color:#1b2b22;font:12pt/1.55 Arial,sans-serif}h1{margin:0 0 6px;font-size:24pt}h2{margin:0 0 22px;color:#28744d;font-size:11pt;font-weight:600}.meta{margin-bottom:24px;padding:14px 16px;border:1px solid #dce8dd;background:#f5f9f4}.meta p{margin:3px 0}.entry{padding:16px 0;border-top:1px solid #dfe7df;break-inside:avoid}.entry header{display:flex;justify-content:space-between;gap:16px;color:#36714f;font-size:9pt}.entry header span{color:#748178}.entry p{margin:10px 0 0;font-size:13pt;line-height:1.65;overflow-wrap:anywhere}.entry .en{color:#3d5c4a;font-size:11pt}
     </style></head><body><h1>Store Listen</h1><h2>Capture ${escapeHtml(payload.filename || '')}</h2><section class="meta"><p><strong>Store:</strong> ${escapeHtml(payload.storeName)}</p><p><strong>Device:</strong> ${escapeHtml(payload.deviceName)}</p><p><strong>Started:</strong> ${escapeHtml(payload.startedAt)}</p><p><strong>Duration:</strong> ${escapeHtml(payload.duration)}</p><p><strong>Status:</strong> ${escapeHtml(payload.status)}</p></section>${entryMarkup || '<p>No speech was recognized in this capture.</p>'}</body></html>`;
   }
 
@@ -170,6 +206,9 @@
     filename,
     groupEntriesIntoParagraphs,
     paragraphParts,
+    formatParagraphSpoken,
+    formatParagraphStaffEnglish,
+    formatParagraphEnglish,
     formatParagraphPlain,
     transcriptText,
     pdfHtml,

@@ -61,7 +61,12 @@ from app.services.events import hub
 from app.services.audio_storage import delete_audio_clip, merge_audio_clips, resolve_audio_clip, save_audio_clip
 from app.services.intelligence import analyze_and_persist
 from app.services.matching import match_transaction
+from app.services.device_approval import device_approval_status, device_is_approved
 from app.services.recording_cleanup import delete_recording_entry, delete_recordings_by_ids, wipe_all_conversation_audio
+from app.services.store_listener_report import (
+    build_interaction_cards_from_conversations,
+    build_store_listener_daily_report,
+)
 from app.services.queries import (
     apply_store_scope,
     dashboard_summary,
@@ -1231,6 +1236,12 @@ def assign_transcript_speaker(
 async def start_audio_session(body: AudioSessionStart, db: Session = Depends(get_db), actor: tuple[User | None, StoreDevice | None] = Depends(_audio_actor)) -> dict[str, Any]:
     if not _audio_store(db, body.store_id, actor):
         raise HTTPException(404, "Store not found")
+    _user, device = actor
+    if device is not None and not device_is_approved(device):
+        raise HTTPException(
+            403,
+            f"This store device is awaiting admin approval ({device_approval_status(device)}). Recording is blocked until approved.",
+        )
     conversation = Conversation(
         id=f"conv-{uuid4().hex[:12]}",
         store_id=body.store_id,
@@ -1879,13 +1890,55 @@ def generate_daily_report(
         logger.exception("Daily report AI summary failed store_id=%s", store.id)
         raise HTTPException(503, "The configured AI provider is unavailable; the report was not saved with a fabricated fallback.") from exc
     generated_at = datetime.now(UTC).isoformat()
+    low_stock = db.query(StockItem).filter(
+        StockItem.store_id == store.id,
+        StockItem.quantity <= StockItem.par_level,
+    ).count()
+    conversation_rows = apply_store_scope(db.query(Conversation), Conversation, user).filter(
+        Conversation.store_id == store.id,
+        Conversation.started_at >= datetime.fromisoformat(report["range_start"]),
+        Conversation.started_at < datetime.fromisoformat(report["range_end"]),
+    ).order_by(Conversation.started_at.asc()).all()
+    conversation_ids = [row.id for row in conversation_rows]
+    segments_by_conversation: dict[str, list] = {}
+    if conversation_ids:
+        for segment in db.query(TranscriptSegment).filter(
+            TranscriptSegment.conversation_id.in_(conversation_ids)
+        ).order_by(TranscriptSegment.start_time.asc()).all():
+            segments_by_conversation.setdefault(segment.conversation_id, []).append(segment)
+    opportunities_by_conversation: dict[str, list] = {}
+    if conversation_ids:
+        for opportunity in db.query(ProductOpportunity).filter(
+            ProductOpportunity.conversation_id.in_(conversation_ids)
+        ).all():
+            opportunities_by_conversation.setdefault(opportunity.conversation_id, []).append(opportunity)
+    location = ", ".join(part for part in [getattr(store, "city", None), getattr(store, "region", None)] if part)
+    interactions = build_interaction_cards_from_conversations(
+        conversation_rows,
+        store_name=store.name,
+        store_location=location,
+        segments_by_conversation=segments_by_conversation,
+        opportunities_by_conversation=opportunities_by_conversation,
+        reports_by_conversation={},
+    )
+    store_listener = build_store_listener_daily_report(
+        store_name=store.name,
+        store_location=location,
+        report={**report, "generatedAt": generated_at},
+        provider_summary=report["daily_analysis"].get("provider_summary"),
+        low_stock_count=low_stock,
+        redacted_count=0,
+        interactions=interactions,
+    )
     payload = {
         "reportType": "daily",
         "reportStatus": "generated",
         "generatedAt": generated_at,
         "store_id": store.id,
+        "store_name": store.name,
         **report,
         "pos_provider": settings.pos_provider,
+        "store_listener": store_listener,
     }
     report_id = f"daily-{store.id}-{report['business_date']}"
     saved = db.get(DailyReport, report_id)
@@ -2151,7 +2204,8 @@ def register_device(body: DeviceRegister, db: Session = Depends(get_db), user: U
         id=f"device-{uuid4().hex[:8]}",
         store_id=body.store_id,
         name=body.name,
-        status="registered",
+        status="pending_approval",
+        approval_status="pending",
         audio_source=body.audio_source,
         secret_hash=hash_device_secret(raw),
     )
@@ -2162,10 +2216,129 @@ def register_device(body: DeviceRegister, db: Session = Depends(get_db), user: U
         action="device.registered",
         entity="store_device",
         entity_id=device.id,
-        detail=body.store_id,
+        detail=f"{body.store_id};pending",
     ))
     db.commit()
-    return {"device_id": device.id, "device_secret": raw, "note": "Store the device secret on the agent. It is shown once."}
+    return {
+        "device_id": device.id,
+        "device_secret": raw,
+        "approval_status": "pending",
+        "note": "Device registered and awaiting admin approval. Store the device secret once; recording stays blocked until approved.",
+    }
+
+
+def _serialize_device_approval(db: Session, device: StoreDevice) -> dict[str, Any]:
+    store = db.get(Store, device.store_id)
+    return {
+        "id": device.id,
+        "name": device.name,
+        "store_id": device.store_id,
+        "store_name": store.name if store else device.store_id,
+        "store_city": getattr(store, "city", "") if store else "",
+        "store_region": getattr(store, "region", "") if store else "",
+        "status": device.status,
+        "approval_status": device_approval_status(device),
+        "audio_source": device.audio_source,
+        "version": device.version,
+        "last_heartbeat": device.last_heartbeat.isoformat() if device.last_heartbeat else None,
+        "revoked": bool(device.revoked),
+        "approved_at": device.approved_at.isoformat() if getattr(device, "approved_at", None) else None,
+    }
+
+
+@api.get("/devices/pending")
+def list_pending_devices(db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    _require_organization_admin(user)
+    rows = [
+        device
+        for device in apply_store_scope(db.query(StoreDevice), StoreDevice, user).all()
+        if device_approval_status(device) == "pending" and not device.revoked
+    ]
+    rows.sort(key=lambda item: item.name.lower())
+    return {"devices": [_serialize_device_approval(db, device) for device in rows], "total": len(rows)}
+
+
+@api.get("/devices/{device_id}/approval")
+def get_device_approval(
+    device_id: str,
+    db: Session = Depends(get_db),
+    actor: tuple[User | None, StoreDevice | None] = Depends(_audio_actor),
+) -> dict[str, Any]:
+    user, device_actor = actor
+    device = db.get(StoreDevice, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found")
+    if device_actor and device_actor.id != device.id:
+        raise HTTPException(403, "Device credentials do not match this device")
+    if user and not _scoped_record(db, StoreDevice, device_id, user):
+        raise HTTPException(404, "Device not found")
+    return {
+        "device_id": device.id,
+        "approval_status": device_approval_status(device),
+        "approved": device_is_approved(device),
+        "status": device.status,
+        "revoked": bool(device.revoked),
+    }
+
+
+@api.post("/devices/{device_id}/approve")
+async def approve_device(device_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    _require_organization_admin(user)
+    device = _scoped_record(db, StoreDevice, device_id, user)
+    if not device:
+        raise HTTPException(404, "Device not found")
+    if device.revoked:
+        raise HTTPException(409, "Revoked devices cannot be approved")
+    device.approval_status = "approved"
+    device.status = "registered"
+    device.approved_at = datetime.now(UTC)
+    device.approved_by = user.id
+    db.add(AuditLog(
+        id=f"aud-{uuid4().hex[:10]}",
+        actor_id=user.id,
+        action="device.approved",
+        entity="store_device",
+        entity_id=device.id,
+        detail=device.store_id,
+    ))
+    db.commit()
+    await hub.publish(f"store:{device.store_id}", {
+        "event": "device.approved",
+        "deviceId": device.id,
+        "storeId": device.store_id,
+        "approvalStatus": "approved",
+        "timestamp": datetime.now(UTC).isoformat(),
+    })
+    return _serialize_device_approval(db, device)
+
+
+@api.post("/devices/{device_id}/reject")
+async def reject_device(device_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    _require_organization_admin(user)
+    device = _scoped_record(db, StoreDevice, device_id, user)
+    if not device:
+        raise HTTPException(404, "Device not found")
+    device.approval_status = "rejected"
+    device.status = "rejected"
+    device.approved_at = None
+    device.approved_by = user.id
+    db.add(AuditLog(
+        id=f"aud-{uuid4().hex[:10]}",
+        actor_id=user.id,
+        action="device.rejected",
+        entity="store_device",
+        entity_id=device.id,
+        detail=device.store_id,
+    ))
+    db.commit()
+    await hub.publish(f"store:{device.store_id}", {
+        "event": "device.rejected",
+        "deviceId": device.id,
+        "storeId": device.store_id,
+        "approvalStatus": "rejected",
+        "timestamp": datetime.now(UTC).isoformat(),
+    })
+    return _serialize_device_approval(db, device)
 
 
 @api.post("/devices/{device_id}/revoke")
@@ -2176,6 +2349,7 @@ def revoke_device(device_id: str, db: Session = Depends(get_db), user: User = De
     _employee_store_for_write(db, device.store_id, user)
     device.revoked = True
     device.status = "revoked"
+    device.approval_status = "rejected"
     db.add(AuditLog(
         id=f"aud-{uuid4().hex[:10]}",
         actor_id=user.id,

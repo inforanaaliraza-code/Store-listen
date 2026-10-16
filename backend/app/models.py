@@ -38,6 +38,8 @@ class StoreDevice(Base):
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
     name: Mapped[str] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(40), default="disconnected")
+    # pending → approved (admin) before the desktop agent may record/stream.
+    approval_status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
     audio_source: Mapped[str] = mapped_column(String(40), default="mock")
     version: Mapped[str] = mapped_column(String(40), default="0.2.0")
     secret_hash: Mapped[str] = mapped_column(String(128))
@@ -49,6 +51,8 @@ class StoreDevice(Base):
     stream_status: Mapped[str] = mapped_column(String(40), default="idle")
     processing_latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     store: Mapped[Store] = relationship(back_populates="devices")
 
 

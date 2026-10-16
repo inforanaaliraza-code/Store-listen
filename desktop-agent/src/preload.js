@@ -17,4 +17,6 @@ contextBridge.exposeInMainWorld('storeListen', {
   onCaptureStopRequested: (callback) => ipcRenderer.on('capture-stop-requested', callback),
   captureStopComplete: () => ipcRenderer.send('capture-stop-complete'),
   onWindowOpened: (callback) => ipcRenderer.on('window-opened', callback),
+  onSystemSuspend: (callback) => ipcRenderer.on('system-suspend', callback),
+  onSystemResume: (callback) => ipcRenderer.on('system-resume', callback),
 });

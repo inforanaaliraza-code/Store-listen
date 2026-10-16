@@ -37,13 +37,11 @@ test('groups speech into paragraphs after one minute of silence', () => {
   assert.equal(paragraphs.length, 2);
   assert.equal(paragraphs[0].entries.length, 2);
   assert.equal(paragraphs[1].entries.length, 1);
-  assert.equal(
-    formatParagraphPlain(paragraphs[0].entries),
-    'Hello Gracias (Thank you)',
-  );
+  assert.match(formatParagraphPlain(paragraphs[0].entries), /Hello Thank you/);
+  assert.match(formatParagraphPlain(paragraphs[0].entries), /ES: Hello Gracias/);
 });
 
-test('TXT export uses paragraph flow with inline Spanish gloss', () => {
+test('TXT export uses paragraph flow with staff English line', () => {
   const session = {
     fileNumber: 4,
     startedAt: new Date('2026-10-13T12:00:00.000Z'),
@@ -95,6 +93,7 @@ test('PDF HTML escapes transcript and metadata while retaining translation gloss
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.match(html, /Store &lt;001&gt;/);
   assert.match(html, /Safe &amp; translated/);
+  assert.match(html, /<strong>ES<\/strong>/);
   assert.match(html, /Content-Security-Policy/);
   const longHtml = pdfHtml({
     entries: Array.from({ length: 1001 }, (_, index) => ({

@@ -81,13 +81,19 @@
               <span class="live-indicator" id="captureIndicator"><i></i><span>READY</span></span>
               <div class="capture-bar-copy">
                 <strong id="captureTitle">Ready to capture</strong>
-                <p id="captureMessage">Pick a mic and start. English &amp; Spanish lines appear below.</p>
+                <p id="captureMessage">Pick a mic and start. Conversation shows in English (Spanish audio is translated).</p>
               </div>
               <span class="capture-session" id="sessionTime">00:00:00</span>
             </div>
             <div class="capture-bar-controls">
               <label class="mic-select"><span>MIC</span><select id="microphoneSelect"><option value="">Default microphone</option></select></label>
-              <div class="capture-mic-status"><strong id="micStatus"><i class="status-dot neutral"></i>Idle</strong><small id="apiStatus"><i class="status-dot"></i>Checking</small></div>
+              <div class="capture-mic-status">
+                <strong id="micStatus"><i class="status-dot neutral"></i>Idle</strong>
+                <div class="mic-waveform" id="micWaveform" aria-hidden="true" title="Microphone activity">
+                  <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                </div>
+                <small id="apiStatus"><i class="status-dot"></i>Checking</small>
+              </div>
               <button class="capture-button" id="captureButton" type="button"><span class="capture-button-icon"><svg id="captureButtonIcon" viewBox="0 0 24 24"><path d="M12 3v12M8 7v7a4 4 0 0 0 8 0V7M5 12a7 7 0 0 0 14 0M12 19v3M9 22h6"/></svg></span><span id="captureButtonLabel">Start</span></button>
             </div>
             <div class="stats-strip">
@@ -98,6 +104,7 @@
             </div>
           </article>
           <p class="capture-error" id="captureError" role="alert" hidden></p>
+          <p class="approval-banner" id="approvalBanner" hidden>Waiting for admin approval before this device can start listening.</p>
           <span class="heading-date" id="currentDate" hidden></span>
 
           <div class="capture-grid">

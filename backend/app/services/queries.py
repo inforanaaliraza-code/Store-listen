@@ -201,12 +201,35 @@ def dashboard_summary(db: Session, user: User) -> dict:
         languages[conversation.primary_language] += 1
         if conversation.started_at and trend_start <= conversation.started_at <= now:
             trend_counts[conversation.started_at.date().isoformat()] += 1
+    all_conversations = conv_q.all()
+    conversation_ids = [row.id for row in all_conversations]
+    analyzed_ids = set()
+    if conversation_ids:
+        for run in db.query(AiProcessingRun).filter(
+            AiProcessingRun.conversation_id.in_(conversation_ids),
+            AiProcessingRun.status == "completed",
+        ).all():
+            analyzed_ids.add(run.conversation_id)
+        for opportunity in opp_q.all():
+            analyzed_ids.add(opportunity.conversation_id)
+    missed_rows = opp_q.filter(ProductOpportunity.status == "MISSED").all()
+    missed_by_category: Counter[str] = Counter()
+    for opportunity in missed_rows:
+        product = (getattr(opportunity, "product_name", None) or getattr(opportunity, "product", None) or "Other").strip()
+        category = product.split()[0].title() if product else "Other"
+        if "charg" in product.lower():
+            category = "Charger"
+        elif "iphone" in product.lower() or "phone" in product.lower():
+            category = "Phone models"
+        missed_by_category[category or "Other"] += 1
     metrics = {
         "active_stores": len(stores),
         "online_stores": sum(1 for store in stores if store["online"]),
         "offline_stores": sum(1 for store in stores if not store["online"]),
         "live_conversations": conv_q.filter(Conversation.status == "LIVE").count(),
         "conversations_today": conversations_today,
+        "total_conversations": len(all_conversations),
+        "analyzed_conversations": len(analyzed_ids),
         "potential_missed_opportunities": missed,
         "sales_opportunities": total_opp,
         "converted_opportunities": converted,
@@ -214,9 +237,12 @@ def dashboard_summary(db: Session, user: User) -> dict:
         "average_response_time_seconds": None,
         "language_distribution": languages,
         "conversation_trend": [trend_counts.get(day, 0) for day in trend_dates],
+        "conversation_trend_dates": trend_dates,
+        "missed_by_category": dict(missed_by_category),
+        "manager_review_required": opp_q.filter(ProductOpportunity.status == "REVIEW_REQUIRED").count(),
         "pos_correlated": db.query(ConversationPosMatch).filter(
-            ConversationPosMatch.conversation_id.in_([row.id for row in conv_q.all()])
-        ).count(),
+            ConversationPosMatch.conversation_id.in_(conversation_ids)
+        ).count() if conversation_ids else 0,
         "sales_count_7d": len(recent_sales),
         "revenue_by_currency_7d": {currency: round(amount, 2) for currency, amount in revenue_by_currency.items()},
         "listening_seconds_7d": round(sum(recording.duration_seconds for recording in recent_recordings), 2),

@@ -9,6 +9,7 @@ import { ConfirmDialogProvider } from './confirm-dialog';
 
 const nav = [
   { href: '/dashboard', label: 'Overview' },
+  { href: '/approvals', label: 'Store approvals' },
   { href: '/live', label: 'Live monitor' },
   { href: '/recordings', label: 'Recordings' },
   { href: '/conversations', label: 'Conversations' },

@@ -272,6 +272,19 @@ def test_device_audio_is_store_scoped_and_visible_in_admin_transcripts(monkeypat
     )
     assert registered.status_code == 200, registered.text
     device_id = registered.json()["device_id"]
+    assert registered.json()["approval_status"] == "pending"
+    blocked = client.post(
+        "/api/v1/audio/sessions",
+        headers={
+            "Authorization": f"Bearer {registered.json()['device_secret']}",
+            "X-Device-ID": device_id,
+        },
+        json={"store_id": "store-001"},
+    )
+    assert blocked.status_code == 403, blocked.text
+    approved = client.post(f"/api/v1/devices/{device_id}/approve", headers=admin_headers)
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["approval_status"] == "approved"
     device_headers = {
         "Authorization": f"Bearer {registered.json()['device_secret']}",
         "X-Device-ID": device_id,

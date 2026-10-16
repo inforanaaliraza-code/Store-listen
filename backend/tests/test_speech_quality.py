@@ -1,6 +1,7 @@
 from app.providers.speech_quality import (
     is_hallucinated_transcript,
     is_recent_duplicate,
+    is_usable_english_translation,
     looks_like_spanish,
     normalize_language,
     polish_spanish_translation,
@@ -54,5 +55,18 @@ def test_rejects_filler_and_keeps_store_phrases():
     assert is_hallucinated_transcript("Ciao")
     assert is_hallucinated_transcript("ok")
     assert is_hallucinated_transcript("mmm")
+    assert is_hallucinated_transcript("Terima kasih telah menonton!")
     assert not is_hallucinated_transcript("Necesito un cargador para iPhone")
     assert not is_hallucinated_transcript("How much is this cable?")
+
+
+def test_usable_english_translation_rejects_spanish_echo():
+    assert is_usable_english_translation(
+        "Señor, tenemos este producto",
+        "Sir, we have this product",
+    )
+    assert not is_usable_english_translation(
+        "Señor, tenemos este producto",
+        "Señor, tenemos este producto",
+    )
+    assert polish_spanish_translation("Gracias", "Gracias") == "Thank you"

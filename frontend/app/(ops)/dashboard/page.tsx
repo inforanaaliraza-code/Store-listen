@@ -123,12 +123,12 @@ export default function DashboardPage() {
           if (event.event === 'transcript.final' && event.originalText) {
             finalCaptureSequences.set(conversationId, Math.max(finalCaptureSequences.get(conversationId) ?? 0, event.captureSequence ?? 0));
             previewSequences.delete(conversationId);
+            const english = event.translatedText || event.originalText || '';
             const line: LiveLine = {
               id: event.segmentId || `${event.timestamp}-${Math.random()}`,
               storeId: event.storeId || storeId,
               speaker: event.speakerLabel || 'Speaker',
-              text: event.originalText,
-              translation: event.translatedText && event.translatedText !== event.originalText ? event.translatedText : undefined,
+              text: english,
               at: event.timestamp || new Date().toISOString(),
             };
             setLiveLines((items) => [line, ...items.filter((item) => item.id !== line.id)].slice(0, 12));
@@ -164,17 +164,25 @@ export default function DashboardPage() {
   if (error && !data) return <section className="error" role="alert"><h1>Dashboard unavailable</h1><p>{error}</p><button className="primary" onClick={() => void load()} disabled={loading}>{loading ? 'Retrying…' : 'Retry'}</button></section>;
   if (!data) return <div className="skeleton" role="status" aria-label="Loading dashboard" />;
 
-  const m = data.metrics;
+  const m = data.metrics as typeof data.metrics & {
+    total_conversations?: number;
+    analyzed_conversations?: number;
+    conversation_trend_dates?: string[];
+    missed_by_category?: Record<string, number>;
+    manager_review_required?: number;
+  };
   const stores = deviceFilter === 'all' ? data.stores : data.stores.filter((store) => store.id === deviceFilter);
-  const supportedLanguageCounts = Object.entries(m.language_distribution).filter(([language]) => ['en', 'es', 'hi', 'ur'].includes(language));
+  const supportedLanguageCounts = Object.entries(m.language_distribution).filter(([language]) => ['en', 'es'].includes(language));
   const cards = [
-    { label: 'Potential missed', value: m.potential_missed_opportunities, note: 'Opportunities marked missed', color: 'red' },
-    { label: 'Conversion rate', value: `${Math.round(m.conversion_rate * 100)}%`, note: `${m.converted_opportunities} of ${m.sales_opportunities} opportunities`, color: 'teal' },
-    { label: 'Detected revenue', value: revenueLabel(m.revenue_by_currency_7d), note: 'POS · last 7 days', color: 'gold' },
-    { label: 'Conversations', value: m.conversations_today, note: `${m.live_conversations} live now`, color: 'green' },
-    { label: 'Listening time', value: `${Math.floor((m.listening_seconds_7d ?? 0) / 3600)}h ${Math.floor(((m.listening_seconds_7d ?? 0) % 3600) / 60)}m`, note: 'Across recorders · last 7 days', color: 'blue' },
-    { label: 'Recorders online', value: `${m.recorders_online ?? 0}/${m.recorders_total ?? data.stores.length}`, note: `${data.stores.length} stores in view`, color: 'green' },
+    { label: 'Total Conversations', value: m.total_conversations ?? m.conversations_today, note: `${m.live_conversations} live now · ${m.conversations_today} today`, color: 'green' },
+    { label: 'Analyzed Conversations', value: m.analyzed_conversations ?? 0, note: 'AI analysis completed or opportunity scored', color: 'teal' },
+    { label: 'Missed Opportunities', value: m.potential_missed_opportunities, note: 'Marked missed for manager review', color: 'red' },
+    { label: 'Sales Opportunities', value: m.sales_opportunities, note: `${m.converted_opportunities} converted · ${Math.round(m.conversion_rate * 100)}% rate`, color: 'gold' },
   ];
+  const trend = m.conversation_trend || [];
+  const trendMax = Math.max(...trend, 1);
+  const trendDates = m.conversation_trend_dates || trend.map((_, index) => `D-${trend.length - index}`);
+  const missedCategories = Object.entries(m.missed_by_category || {});
   const latestRecommendation = recommendations[0];
 
   return (
@@ -182,12 +190,12 @@ export default function DashboardPage() {
       <div className="heading">
         <div>
           <span className="eyebrow">SHOP OWNER</span>
-          <h1 className="serif">Dashboard</h1>
+          <h1 className="serif">Overview</h1>
           <p>Live conversations, sales signals, and recorder health across your stores.</p>
         </div>
         <div className="owner-actions">
           <span className="owner-period">Last 7 days</span>
-          <button className="primary owner-button" onClick={() => window.print()}>Export PDF</button>
+          <button className="primary owner-button" onClick={() => window.print()}>Download PDF</button>
           <button className="ghost owner-button" onClick={() => void load()} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>
         </div>
       </div>
@@ -200,6 +208,28 @@ export default function DashboardPage() {
             <small>{card.note}</small>
           </article>
         ))}
+      </section>
+      <section className="owner-work-grid" style={{ marginBottom: 16 }}>
+        <article className="owner-panel">
+          <div className="owner-panel-heading"><div><span className="eyebrow">ACTIVITY</span><h2>Conversations · last 7 days</h2></div></div>
+          <div className="owner-trend" role="img" aria-label="Conversation activity chart">
+            {trend.map((count, index) => (
+              <div className="owner-trend-bar" key={`${trendDates[index]}-${index}`}>
+                <span style={{ height: `${Math.max(8, (count / trendMax) * 100)}%` }} title={`${trendDates[index]}: ${count}`} />
+                <small>{String(trendDates[index]).slice(5) || count}</small>
+              </div>
+            ))}
+          </div>
+        </article>
+        <article className="owner-panel">
+          <div className="owner-panel-heading"><div><span className="eyebrow">AI INSIGHTS</span><h2>Missed by category</h2><p>{m.manager_review_required ?? 0} conversations need manager review</p></div></div>
+          <div className="owner-category-list">
+            {missedCategories.length ? missedCategories.map(([category, count]) => (
+              <div className="owner-category-row" key={category}><strong>{category}</strong><span>{count}</span></div>
+            )) : <div className="owner-empty-state"><strong>No missed categories yet</strong><p>Missed opportunity products will group here.</p></div>}
+          </div>
+          <p className="owner-data-note" style={{ marginTop: 12 }}>Revenue (7d): {revenueLabel(m.revenue_by_currency_7d)}</p>
+        </article>
       </section>
       <section className="owner-panel owner-live-feed" aria-label="Live transcript from store recorder">
         <div className="owner-panel-heading">
@@ -215,7 +245,6 @@ export default function DashboardPage() {
             <article className="owner-live-line" key={line.id}>
               <span>{data.stores.find((store) => store.id === line.storeId)?.name || line.storeId} · {line.speaker}</span>
               <p>{line.text}</p>
-              {line.translation ? <small>{line.translation}</small> : null}
             </article>
           ))}
           {!liveLines.length ? (

@@ -11,6 +11,7 @@ from app.config import settings
 from app.providers.speech_quality import (
     SUPPORTED_LANGUAGES,
     is_hallucinated_transcript,
+    is_usable_english_translation,
     looks_like_spanish,
     normalize_language,
     polish_spanish_translation,
@@ -240,16 +241,18 @@ class WhisperSpeechProvider(SpeechProvider):
         confidence = sum(segment.avg_logprob for segment in segment_list) / max(len(segment_list), 1)
         confidence = max(0.0, min(1.0, 2.71828**confidence))
         translated = original
-        if language == "es" and settings.whisper_translate_spanish:
+        if settings.whisper_translate_spanish and (language == "es" or looks_like_spanish(original)):
+            language = "es"
             translations, _ = model.transcribe(
                 str(audio_path),
                 task="translate",
                 **{**self._transcribe_kwargs("en"), "language": "en"},
             )
-            translated = polish_spanish_translation(
+            polished = polish_spanish_translation(
                 original,
-                sanitize_transcript(" ".join(segment.text.strip() for segment in translations)) or original,
+                sanitize_transcript(" ".join(segment.text.strip() for segment in translations)),
             )
+            translated = polished or original
         return SpeechResult(original, language, translated, confidence, True, "spk-unassigned")
 
 
@@ -308,6 +311,25 @@ class CloudSpeechProvider(SpeechProvider):
         detected = normalize_supported_language(getattr(result, "language", None) or language)
         return text, detected
 
+    def _chat_translate_spanish(self, client, config: dict[str, str], spanish_text: str) -> str:
+        chat_model = "llama-3.1-8b-instant" if config["label"] == "groq" else "gpt-4o-mini"
+        completion = client.chat.completions.create(
+            model=chat_model,
+            temperature=0,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Translate the customer's Spanish retail-store speech into clear, concise English "
+                        "for store staff who do not speak Spanish. "
+                        "Return only the English translation, no quotes or commentary."
+                    ),
+                },
+                {"role": "user", "content": spanish_text},
+            ],
+        )
+        return sanitize_transcript(completion.choices[0].message.content or "")
+
     def _translate_to_english(self, client, config: dict[str, str], path: Path, spanish_text: str) -> str:
         """Produce English for staff. Prefer Whisper translate; fall back to chat."""
         filename = path.name or f"audio{path.suffix or '.webm'}"
@@ -321,34 +343,18 @@ class CloudSpeechProvider(SpeechProvider):
                     temperature=0,
                 )
             translated = sanitize_transcript(getattr(result, "text", None) or "")
-            if translated and not is_hallucinated_transcript(translated):
+            if is_usable_english_translation(spanish_text, translated):
                 return translated
         except Exception:
             logger.info("Audio translate endpoint unavailable; falling back to text translation", exc_info=True)
 
-        # Free Groq chat translate for Spanish text when audio-translate is unavailable.
         try:
-            chat_model = "llama-3.1-8b-instant" if config["label"] == "groq" else "gpt-4o-mini"
-            completion = client.chat.completions.create(
-                model=chat_model,
-                temperature=0,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Translate the customer's Spanish retail-store speech into clear, concise English. "
-                            "Return only the English translation, no quotes or commentary."
-                        ),
-                    },
-                    {"role": "user", "content": spanish_text},
-                ],
-            )
-            translated = sanitize_transcript(completion.choices[0].message.content or "")
-            if translated and not is_hallucinated_transcript(translated):
+            translated = self._chat_translate_spanish(client, config, spanish_text)
+            if is_usable_english_translation(spanish_text, translated):
                 return translated
         except Exception:
             logger.warning("Text translation fallback failed", exc_info=True)
-        return spanish_text
+        return ""
 
     def transcribe_file(self, audio_path: str | Path, language_hint: str | None = None) -> SpeechResult:
         if language_hint and not normalize_supported_language(language_hint):
@@ -379,11 +385,25 @@ class CloudSpeechProvider(SpeechProvider):
 
         original, language = _finalize_transcript(original, detected, hint)
         translated = original
-        if language == "es" and settings.whisper_translate_spanish:
-            translated = polish_spanish_translation(
+        # Always produce staff English whenever the spoken line is Spanish.
+        if settings.whisper_translate_spanish and (language == "es" or looks_like_spanish(original)):
+            language = "es"
+            polished = polish_spanish_translation(
                 original,
                 self._translate_to_english(client, config, path, original),
             )
+            if polished:
+                translated = polished
+            else:
+                # Last-resort chat pass if audio translate echoed Spanish or returned junk.
+                try:
+                    retry = polish_spanish_translation(
+                        original,
+                        self._chat_translate_spanish(client, config, original),
+                    )
+                    translated = retry or original
+                except Exception:
+                    translated = original
 
         self.name = config["label"] or "cloud"
         logger.info(

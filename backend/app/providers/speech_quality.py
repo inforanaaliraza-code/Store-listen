@@ -76,6 +76,10 @@ _HALLUCINATION_CONTAINS = (
     "retail store conversation",
     "between a customer and an employee",
     "thanks for watching or subscribe",
+    "terima kasih",
+    "telah menonton",
+    "menonton",
+    "ありがとう",
 )
 
 # Portuguese / other-language tokens Whisper invents on noise (not EN/ES store speech).
@@ -108,6 +112,9 @@ _PORTUGUESE_OR_FOREIGN_TOKENS = frozenset(
         "oie",
         "opa",
         "ei",
+        "terima",
+        "kasih",
+        "menonton",
     }
 )
 
@@ -299,19 +306,41 @@ def sanitize_transcript(text: str) -> str:
     return cleaned
 
 
+def is_usable_english_translation(original: str, translated: str) -> bool:
+    """True when translated text is real English staff can read (not Spanish echo / junk)."""
+    translated_clean = sanitize_transcript(translated)
+    if not translated_clean or is_hallucinated_transcript(translated_clean):
+        return False
+    if _normalize_phrase(translated_clean) == _normalize_phrase(original):
+        return False
+    # Still Spanish → not usable for English-only staff.
+    if looks_like_spanish(translated_clean) and not looks_like_spanish(original):
+        return False
+    if looks_like_spanish(translated_clean) and _normalize_phrase(translated_clean) == _normalize_phrase(original):
+        return False
+    if looks_like_spanish(translated_clean) and len(_WORD_RE.findall(translated_clean)) >= 3:
+        # Long Spanish left untranslated is useless for staff.
+        spanish_markers = ("señor", "senor", "tenemos", "producto", "gracias", "hola", "dólares", "dolares", "por")
+        lowered = _normalize_phrase(translated_clean)
+        if sum(1 for marker in spanish_markers if marker in lowered) >= 2:
+            return False
+    return True
+
+
 def polish_spanish_translation(original: str, translated: str) -> str:
     """Keep staff EN line honest for short Spanish; drop unrelated invents."""
     phrase = _normalize_phrase(original)
     if phrase in _ALLOWED_SHORT_ES:
         return _ALLOWED_SHORT_ES[phrase]
     translated_clean = sanitize_transcript(translated)
-    if not translated_clean or is_hallucinated_transcript(translated_clean):
-        return sanitize_transcript(original)
+    if not is_usable_english_translation(original, translated_clean):
+        # Prefer empty sentinel so callers can retry; short phrases still get dictionary EN.
+        return _ALLOWED_SHORT_ES.get(phrase, "")
     orig_words = _WORD_RE.findall(phrase)
     trans_words = _WORD_RE.findall(_normalize_phrase(translated_clean))
     # One Spanish word must not become a long invented English sentence.
     if len(orig_words) <= 2 and len(trans_words) >= 6:
-        return sanitize_transcript(original)
+        return _ALLOWED_SHORT_ES.get(phrase, "")
     return translated_clean
 
 
