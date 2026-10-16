@@ -1398,6 +1398,13 @@ button { cursor: pointer; }
 .settings-tab.active { border-bottom-color: #20a763; color: #1f7648; }
 
 .recordings-page .heading { align-items: center; }
+.recordings-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 14px; padding: 10px 12px; border: 1px solid #e4ebe4; border-radius: 6px; background: #f8fbf8; }
+.recordings-select-all { display: inline-flex; align-items: center; gap: 8px; color: #506357; font-size: 12px; font-weight: 650; }
+.recordings-selected-count { color: #6d7d72; font-size: 12px; font-variant-numeric: tabular-nums; }
+.recordings-wipe-button, .recordings-delete-button { color: #9a4a3a !important; border-color: #efd5cf !important; }
+.recordings-wipe-button:hover, .recordings-delete-button:hover { background: #fff5f2 !important; }
+.recordings-check-col { width: 54px; text-align: center; }
+.recordings-table tr.is-selected td { background: #f3f8f3; }
 .recordings-total { flex: none; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 12px; font-weight: 700; }
 .recordings-toolbar { display: grid; grid-template-columns: minmax(145px, .9fr) repeat(2, minmax(130px, .7fr)) minmax(145px, .8fr) minmax(200px, 1.2fr); align-items: end; gap: 12px; margin: 16px 0; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .recordings-toolbar .field { min-width: 0; margin: 0; }

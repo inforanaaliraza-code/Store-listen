@@ -61,6 +61,7 @@ from app.services.events import hub
 from app.services.audio_storage import delete_audio_clip, merge_audio_clips, resolve_audio_clip, save_audio_clip
 from app.services.intelligence import analyze_and_persist
 from app.services.matching import match_transaction
+from app.services.recording_cleanup import delete_recording_entry, delete_recordings_by_ids, wipe_all_conversation_audio
 from app.services.queries import (
     apply_store_scope,
     dashboard_summary,
@@ -214,6 +215,18 @@ class TranscriptSpeakerAssignment(BaseModel):
 class DailyReportGenerate(BaseModel):
     store_id: str = Field(min_length=1, max_length=64)
     business_date: date | None = None
+
+
+class RecordingsBulkDelete(BaseModel):
+    recording_ids: list[str] = Field(default_factory=list, max_length=500)
+    wipe_all: bool = False
+    store_id: str | None = Field(default=None, max_length=64)
+    confirm: str = Field(min_length=1, max_length=64)
+
+
+def _require_recording_manager(user: User) -> None:
+    if user.role not in {"SUPER_ADMIN", "ORG_ADMIN", "STORE_MANAGER"}:
+        raise HTTPException(403, "Recording management access required")
 
 
 def _scoped_record(db: Session, model, record_id: str, user: User):
@@ -716,6 +729,85 @@ def recordings_library(
         "total": total,
         "pages": (total + page_size - 1) // page_size,
     }
+
+
+@api.delete("/recordings/{recording_id}")
+def delete_recording(
+    recording_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    _require_recording_manager(user)
+    recording = _scoped_record(db, AudioRecording, recording_id, user)
+    if not recording:
+        raise HTTPException(404, "Recording not found")
+    deleted = delete_recording_entry(db, recording)
+    db.add(AuditLog(
+        id=f"aud-{uuid4().hex[:10]}",
+        actor_id=user.id,
+        action="recording.deleted",
+        entity="audio_recording",
+        entity_id=recording_id,
+        detail=f"conversations={deleted.get('conversations', 0)};recordings={deleted.get('recordings', 0)}",
+    ))
+    db.commit()
+    return {"id": recording_id, "deleted": True, "counts": deleted}
+
+
+@api.post("/recordings/bulk-delete")
+def bulk_delete_recordings(
+    body: RecordingsBulkDelete,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    _require_recording_manager(user)
+    if body.wipe_all:
+        if body.confirm != "DELETE ALL RECORDINGS":
+            raise HTTPException(400, 'Confirm wipe with confirm="DELETE ALL RECORDINGS"')
+        if user.role == "STORE_MANAGER":
+            store_id = user.store_id
+            if not store_id:
+                raise HTTPException(403, "Store manager wipe requires an assigned store")
+            if body.store_id and body.store_id != store_id:
+                raise HTTPException(403, "Store managers can only wipe their own store")
+        else:
+            store_id = body.store_id
+            if store_id and not _scoped_record(db, Store, store_id, user):
+                raise HTTPException(404, "Store not found")
+        result = wipe_all_conversation_audio(db, store_id=store_id)
+        db.add(AuditLog(
+            id=f"aud-{uuid4().hex[:10]}",
+            actor_id=user.id,
+            action="recording.wipe_all",
+            entity="audio_recording",
+            entity_id=store_id or "all",
+            detail=f"conversations={result['deleted'].get('conversations', 0)};recordings={result['deleted'].get('recordings', 0)}",
+        ))
+        db.commit()
+        return {"wipe_all": True, **result}
+
+    if body.confirm != "DELETE":
+        raise HTTPException(400, 'Confirm bulk delete with confirm="DELETE"')
+    if not body.recording_ids:
+        raise HTTPException(400, "Select at least one recording to delete")
+
+    scoped_ids = [
+        recording.id
+        for recording in apply_store_scope(db.query(AudioRecording), AudioRecording, user)
+        .filter(AudioRecording.id.in_(list(dict.fromkeys(body.recording_ids))))
+        .all()
+    ]
+    result = delete_recordings_by_ids(db, scoped_ids)
+    db.add(AuditLog(
+        id=f"aud-{uuid4().hex[:10]}",
+        actor_id=user.id,
+        action="recording.bulk_deleted",
+        entity="audio_recording",
+        entity_id=",".join(scoped_ids[:8]) or "none",
+        detail=f"matched={result['matched']};conversations={result['deleted'].get('conversations', 0)}",
+    ))
+    db.commit()
+    return {"wipe_all": False, **result}
 
 
 @api.get("/conversations")
