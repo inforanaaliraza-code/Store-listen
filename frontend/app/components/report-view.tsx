@@ -25,6 +25,7 @@ type StoreListenerReport = {
     score: number;
     transcript_summary: string;
     coaching_tip: string;
+    conversation_id?: string;
   }[];
 };
 
