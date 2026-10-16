@@ -11,10 +11,10 @@
     startFrames: 1,
     endFrames: 4,
     silenceHangoverMs: 160,
-    // Continuous short clips + frequent previews for near word-by-word STT.
-    maxSegmentMs: 750,
-    minClipMs: 220,
-    previewIntervalMs: 450,
+    // Continuous short clips + frequent previews for near-instant live text.
+    maxSegmentMs: 520,
+    minClipMs: 160,
+    previewIntervalMs: 280,
     livePreviewEnabled: true,
   });
 

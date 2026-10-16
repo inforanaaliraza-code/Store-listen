@@ -178,43 +178,29 @@ svg { display: block; }
 .section-header .eyebrow { font-size: 8px; }
 .section-header h2 { margin: 2px 0 0; color: #304239; font-family: var(--font-ui); font-size: 18px; font-weight: 650; }
 .feed-count { padding: 4px 7px; border: 1px solid #e4ece5; border-radius: 3px; color: #748279; background: #fbfcfa; font-size: 8px; font-weight: 750; letter-spacing: .6px; }
-.transcript-list { min-height: 0; flex: 1; overflow: auto; scroll-behavior: smooth; }
+.transcript-list { min-height: 0; flex: 1; overflow: auto; scroll-behavior: auto; }
 .live-transcript-lines { display: flex; flex-direction: column; gap: 22px; padding: 20px 22px 32px; min-height: 100%; }
-.live-transcript-copy { min-height: 100%; padding: 22px 24px; animation: rise .25s ease-out both; }
+.live-transcript-copy { min-height: 100%; padding: 22px 24px; }
 .live-transcript-original { margin: 0; color: #263a2f; font-size: 17px; line-height: 1.8; overflow-wrap: anywhere; }
-.transcript-paragraph { padding: 4px 2px 18px; border-bottom: 1px solid #edf0ed; animation: rise .25s ease-out both; }
+.transcript-paragraph { padding: 4px 2px 18px; border-bottom: 1px solid #edf0ed; }
 .transcript-paragraph:last-child { border-bottom: 0; padding-bottom: 0; }
 .transcript-paragraph-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .transcript-paragraph-label { color: #6f8376; font-size: 11px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
 .transcript-paragraph-body { margin: 0; color: #24362c; font-size: 19px; line-height: 1.7; overflow-wrap: anywhere; }
 .transcript-paragraph-en { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 0; color: #2f6b4d; font-size: 16px; line-height: 1.55; overflow-wrap: anywhere; }
 .transcript-en-tag { flex: 0 0 auto; margin-top: 2px; padding: 2px 6px; border: 1px solid #d5e6da; border-radius: 3px; color: #2f6b4d; background: #f1f8f3; font-size: 10px; font-weight: 750; letter-spacing: .04em; }
-.live-typing-trail { display: inline; }
-.live-typing-trail .live-words { color: #2a6b45; font-weight: 600; }
-.live-typing-trail .live-words .word-pop { display: inline-block; animation: word-pop .16s ease-out; }
-.typing-dots { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; vertical-align: middle; }
-.typing-dots i { width: 5px; height: 5px; border-radius: 50%; background: #35a66b; opacity: 0.35; animation: typing-dot .7s infinite ease-in-out; }
-.typing-dots i:nth-child(2) { animation-delay: .12s; }
-.typing-dots i:nth-child(3) { animation-delay: .24s; }
-@keyframes typing-dot { 0%, 80%, 100% { opacity: .2; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
-@keyframes word-pop { from { opacity: .15; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+.live-typing-trail { display: inline; color: #2a6b45; font-weight: 600; }
 .mic-waveform { display: flex; align-items: end; gap: 2px; height: 22px; min-width: 56px; }
-.mic-waveform i { width: 3px; border-radius: 2px; background: #98a59b; min-height: 4px; transition: height .08s linear, background .12s ease; }
+.mic-waveform i { width: 3px; border-radius: 2px; background: #98a59b; min-height: 4px; }
 .capture-bar.recording .mic-waveform i { background: #cf7755; }
 .approval-banner { margin: 0 0 10px; padding: 10px 12px; border: 1px solid #f0dfc9; border-radius: 6px; color: #8a5a20; background: #fff8ee; font-size: 12px; }
-.transcript-typing-dots { display: inline-flex; width: 48px; align-items: center; justify-content: space-between; margin-left: 9px; vertical-align: middle; }
-.transcript-typing-dots i { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: currentColor; opacity: .35; animation: transcript-dot-bounce .42s ease-in-out infinite alternate; }
-.transcript-typing-dots i:nth-child(2) { animation-delay: -.32s; }
-.transcript-typing-dots i:nth-child(3) { animation-delay: -.24s; }
-.transcript-typing-dots i:nth-child(4) { animation-delay: -.16s; }
-.transcript-typing-dots i:nth-child(5) { animation-delay: -.08s; }
 .empty-transcript { display: flex; min-height: 145px; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: #9aa49c; text-align: center; }
 .empty-transcript strong { margin-top: 3px; color: #65736a; font-size: 10px; }
 .empty-transcript > span:last-child { font-size: 9px; }
 .empty-wave { display: flex; height: 19px; align-items: center; gap: 3px; }
 .empty-wave i { width: 2px; height: 6px; border-radius: 3px; background: #9abca1; }
 .empty-wave i:nth-child(2n) { height: 13px; }.empty-wave i:nth-child(3n) { height: 18px; }
-.transcript-item { position: relative; min-height: 112px; padding: 20px 22px 20px 76px; border-bottom: 1px solid #edf0ed; animation: rise .25s ease-out both; }
+.transcript-item { position: relative; min-height: 112px; padding: 20px 22px 20px 76px; border-bottom: 1px solid #edf0ed; }
 .transcript-item:last-child { border-bottom: 0; }
 .transcript-number { position: absolute; top: 20px; left: 20px; display: grid; width: 38px; height: 38px; place-items: center; border: 1px solid #dfe9df; border-radius: 50%; color: #28744d; background: linear-gradient(145deg, #fff, #eff6ef); font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 750; box-shadow: 0 4px 9px rgba(31,79,52,.07); }
 .transcript-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
@@ -246,7 +232,7 @@ svg { display: block; }
 .device-details strong, .device-details code { max-width: 110px; overflow: hidden; color: #607066; font-family: inherit; font-size: 10px; font-weight: 600; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .device-details code { color: #79867d; font-family: "Cascadia Code", Consolas, monospace; }
 .workspace-footer { display: flex; justify-content: space-between; margin-top: 17px; color: #9aa49c; font-size: 8px; font-weight: 700; letter-spacing: .75px; }
-.transcript-view { animation: view-enter .3s ease-out both; }
+.transcript-view { display: block; }
 .transcript-page-heading { align-items: center; }
 .transcript-total { display: flex; min-width: 150px; flex-direction: column; gap: 4px; padding: 12px 16px; border: 1px solid #dce9dc; border-radius: 5px; background: linear-gradient(145deg, #fff, #f1f7f1); box-shadow: 0 8px 22px rgba(31,79,52,.06); }
 .transcript-total span { color: #8a978e; font-size: 8px; font-weight: 750; letter-spacing: .8px; }

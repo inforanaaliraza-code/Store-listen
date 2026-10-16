@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from '@/lib/router-link';
-import { apiGet, getToken, WS_URL, openStoreSocket, type Store } from '../../../lib/api';
+import { apiGet, apiGetWithRetry, getToken, WS_URL, openStoreSocket, wakeApi, type Store } from '../../../lib/api';
 
 type LiveEvent = {
   event: string;
@@ -408,13 +408,28 @@ export default function LivePage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    apiGet<{ stores: { items: Store[] } }>('/api/v1/stores', { signal: controller.signal }).then((payload) => {
-      setStores(payload.stores.items);
-    }).catch((cause: unknown) => {
-      if (!controller.signal.aborted) {
-        setError(cause instanceof Error ? cause.message : 'Unable to load stores');
+    setError('');
+    void (async () => {
+      const awake = await wakeApi(controller.signal);
+      if (controller.signal.aborted) return;
+      if (!awake) {
+        setError('Waking the Store Listen API… If this persists, the free cloud service may be restarting.');
       }
-    });
+      try {
+        const payload = await apiGetWithRetry<{ stores: { items: Store[] } }>(
+          '/api/v1/stores',
+          { signal: controller.signal },
+          5,
+        );
+        if (controller.signal.aborted) return;
+        setStores(payload.stores.items);
+        setError('');
+      } catch (cause: unknown) {
+        if (!controller.signal.aborted) {
+          setError(cause instanceof Error ? cause.message : 'Unable to load stores');
+        }
+      }
+    })();
     return () => controller.abort();
   }, []);
 

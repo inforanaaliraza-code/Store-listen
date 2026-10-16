@@ -32,6 +32,7 @@ export function openStoreSocket(storeId: string, token: string) {
 }
 const TOKEN_KEY = 'sl_token';
 const REQUEST_TIMEOUT_MS = 20_000;
+const WAKE_TIMEOUT_MS = 90_000;
 export const AUDIO_TRANSCRIPTION_TIMEOUT_MS = 45_000;
 
 export class ApiError extends Error {
@@ -168,6 +169,39 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const apiGet = <T>(path: string, options?: Pick<RequestInit, 'signal'>) => request<T>(path, options);
+
+/** Wake a cold Render free-tier API before Live Monitor / ops calls. */
+export async function wakeApi(signal?: AbortSignal): Promise<boolean> {
+  if (!API_URL) return false;
+  try {
+    const response = await fetchApi('/health', { signal }, WAKE_TIMEOUT_MS);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function apiGetWithRetry<T>(
+  path: string,
+  options?: Pick<RequestInit, 'signal'>,
+  attempts = 4,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (options?.signal?.aborted) throw options.signal.reason ?? new DOMException('Aborted', 'AbortError');
+    try {
+      if (attempt === 0) await wakeApi(options?.signal);
+      return await request<T>(path, { ...options, signal: options?.signal });
+    } catch (cause) {
+      lastError = cause;
+      const retryable = cause instanceof ApiError
+        && (cause.code === 'NETWORK_ERROR' || cause.code === 'TIMEOUT' || cause.status >= 500 || cause.status === 0);
+      if (!retryable || attempt === attempts - 1) throw cause;
+      await new Promise((resolve) => globalThis.setTimeout(resolve, Math.min(1500 * (attempt + 1), 6000)));
+    }
+  }
+  throw lastError;
+}
 export const apiPost = <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
 export const apiPatch = <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body: body === undefined ? undefined : JSON.stringify(body) });
 export const apiDelete = <T>(path: string) => request<T>(path, { method: 'DELETE' });

@@ -34,7 +34,11 @@ services:
       - key: CORS_ORIGIN_REGEX
         value: ^$
       - key: AI_PROVIDER
-        value: mock
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash-lite
       # Free fast STT: create a key at https://console.groq.com (no card needed).
       # Without GROQ_API_KEY / AI_API_KEY, SPEECH_PROVIDER=auto falls back to local Whisper (minutes).
       - key: GROQ_API_KEY
