@@ -35,7 +35,10 @@ services:
         value: ^$
       - key: AI_PROVIDER
         value: mock
-      # Required for fast cloud STT (1–3s). Without this key SPEECH_PROVIDER=auto falls back to local Whisper (minutes).
+      # Free fast STT: create a key at https://console.groq.com (no card needed).
+      # Without GROQ_API_KEY / AI_API_KEY, SPEECH_PROVIDER=auto falls back to local Whisper (minutes).
+      - key: GROQ_API_KEY
+        sync: false
       - key: AI_API_KEY
         sync: false
       - key: SPEECH_API_KEY
@@ -43,7 +46,7 @@ services:
       - key: SPEECH_PROVIDER
         value: auto
       - key: SPEECH_CLOUD_MODEL
-        value: gpt-4o-mini-transcribe
+        value: whisper-large-v3-turbo
       - key: WHISPER_MODEL
         value: tiny
       - key: WHISPER_DEVICE

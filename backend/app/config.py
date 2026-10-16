@@ -24,7 +24,10 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.5-flash-lite"
     speech_provider: str = "auto"
     speech_api_key: str = ""
-    speech_cloud_model: str = "gpt-4o-mini-transcribe"
+    groq_api_key: str = ""
+    speech_cloud_base_url: str = ""
+    # Groq free tier default (whisper-large-v3-turbo). For OpenAI paid use gpt-4o-mini-transcribe or whisper-1.
+    speech_cloud_model: str = "whisper-large-v3-turbo"
     whisper_model: str = "tiny"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
@@ -76,10 +79,12 @@ class Settings(BaseSettings):
         blockers = []
         if self.ai_provider == "mock" or (self.ai_provider in {"openai", "azure"} and not self.ai_api_key) or (self.ai_provider == "gemini" and not self.gemini_api_key):
             blockers.append("a configured real AI provider (mock analysis is not allowed)")
-        if self.speech_provider not in {"whisper", "auto", "openai", "cloud"}:
-            blockers.append("a supported speech provider (whisper, auto, or openai cloud)")
-        elif self.speech_provider in {"auto", "openai", "cloud"} and not (self.speech_api_key or self.ai_api_key):
-            blockers.append("SPEECH_API_KEY or AI_API_KEY for cloud speech (local Whisper alone is not production-grade)")
+        if self.speech_provider not in {"whisper", "auto", "openai", "cloud", "groq"}:
+            blockers.append("a supported speech provider (whisper, auto, groq, or openai cloud)")
+        elif self.speech_provider in {"auto", "openai", "cloud", "groq"} and not (
+            self.speech_api_key or self.ai_api_key or self.groq_api_key
+        ):
+            blockers.append("GROQ_API_KEY (free) or SPEECH_API_KEY/AI_API_KEY for cloud speech")
         if self.pos_provider == "mock":
             blockers.append("a confirmed real POS adapter (mock POS simulation is not allowed)")
         else:

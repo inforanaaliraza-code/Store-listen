@@ -53,13 +53,52 @@ def normalize_supported_language(language: str | None) -> str | None:
     return code if code in SUPPORTED_LANGUAGES else None
 
 
+GROQ_OPENAI_BASE_URL = "https://api.groq.com/openai/v1"
+GROQ_DEFAULT_MODEL = "whisper-large-v3-turbo"
+OPENAI_DEFAULT_MODEL = "gpt-4o-mini-transcribe"
+
+
 def resolve_speech_api_key() -> str:
-    return (settings.speech_api_key or settings.ai_api_key or "").strip()
+    """Prefer free Groq, then dedicated speech key, then shared AI key."""
+    return (settings.groq_api_key or settings.speech_api_key or settings.ai_api_key or "").strip()
+
+
+def resolve_speech_cloud_config(requested: str | None = None) -> dict[str, str]:
+    """Return api_key, base_url, model, and label for the active cloud STT backend."""
+    name = (requested or settings.speech_provider or "auto").strip().lower()
+    groq_key = (settings.groq_api_key or "").strip()
+    openai_key = (settings.speech_api_key or settings.ai_api_key or "").strip()
+    custom_base = (settings.speech_cloud_base_url or "").strip()
+    configured_model = (settings.speech_cloud_model or "").strip()
+
+    # auto prefers free Groq when GROQ_API_KEY is set; explicit openai forces OpenAI.
+    use_groq = name == "groq" or (name in {"auto", "cloud"} and bool(groq_key))
+    if use_groq and groq_key:
+        model = configured_model if configured_model.startswith("whisper-large") else GROQ_DEFAULT_MODEL
+        return {
+            "label": "groq",
+            "api_key": groq_key,
+            "base_url": custom_base or GROQ_OPENAI_BASE_URL,
+            "model": model,
+        }
+
+    if openai_key:
+        model = configured_model
+        if not model or model.startswith("whisper-large"):
+            model = OPENAI_DEFAULT_MODEL
+        return {
+            "label": "openai",
+            "api_key": openai_key,
+            "base_url": custom_base,
+            "model": model,
+        }
+
+    return {"label": "", "api_key": "", "base_url": "", "model": ""}
 
 
 def resolve_speech_provider_name(requested: str | None = None) -> str:
     name = (requested or settings.speech_provider or "auto").strip().lower()
-    if name in {"openai", "cloud"}:
+    if name in {"openai", "cloud", "groq"}:
         return "cloud" if resolve_speech_api_key() else "whisper"
     if name == "auto":
         return "cloud" if resolve_speech_api_key() else "whisper"
@@ -186,7 +225,7 @@ class WhisperSpeechProvider(SpeechProvider):
 
 
 class CloudSpeechProvider(SpeechProvider):
-    """OpenAI cloud transcription — typically 1–3s vs minutes on free-tier local Whisper."""
+    """Cloud transcription via Groq (free) or OpenAI — typically 1–3s vs minutes on free CPUs."""
 
     name = "cloud"
 
@@ -207,16 +246,22 @@ class CloudSpeechProvider(SpeechProvider):
     def transcribe_file(self, audio_path: str | Path, language_hint: str | None = None) -> SpeechResult:
         if language_hint and not normalize_supported_language(language_hint):
             raise UnsupportedLanguageDetected(language_hint)
-        api_key = resolve_speech_api_key()
+        config = resolve_speech_cloud_config()
+        api_key = config["api_key"]
         if not api_key:
-            raise RuntimeError("SPEECH_API_KEY or AI_API_KEY is required for cloud speech transcription.")
+            raise RuntimeError(
+                "GROQ_API_KEY (free) or SPEECH_API_KEY / AI_API_KEY is required for cloud speech transcription."
+            )
         try:
             from openai import OpenAI
         except ImportError as exc:
-            raise RuntimeError("Install backend requirements to enable OpenAI cloud speech.") from exc
+            raise RuntimeError("Install backend requirements to enable cloud speech.") from exc
 
-        client = OpenAI(api_key=api_key)
-        model = settings.speech_cloud_model
+        client_kwargs: dict = {"api_key": api_key}
+        if config["base_url"]:
+            client_kwargs["base_url"] = config["base_url"]
+        client = OpenAI(**client_kwargs)
+        model = config["model"]
         hint = normalize_supported_language(language_hint)
         path = Path(audio_path)
         filename = path.name or f"audio{path.suffix or '.webm'}"
@@ -225,7 +270,7 @@ class CloudSpeechProvider(SpeechProvider):
                 "model": model,
                 "file": (filename, audio_file),
             }
-            if model.startswith("whisper"):
+            if "whisper" in model:
                 kwargs["response_format"] = "verbose_json"
             else:
                 kwargs["response_format"] = "json"
@@ -247,7 +292,14 @@ class CloudSpeechProvider(SpeechProvider):
             language = "en"
         if language not in SUPPORTED_LANGUAGES:
             raise UnsupportedLanguageDetected(language)
-        logger.info("Cloud STT complete model=%s language=%s chars=%s", model, language, len(original))
+        self.name = config["label"] or "cloud"
+        logger.info(
+            "Cloud STT complete backend=%s model=%s language=%s chars=%s",
+            self.name,
+            model,
+            language,
+            len(original),
+        )
         return SpeechResult(original, language, original, 0.92, True, "spk-unassigned")
 
 
@@ -256,7 +308,10 @@ _speech_provider_cache: dict[str, SpeechProvider] = {}
 
 def get_speech_provider(name: str | None = None) -> SpeechProvider:
     resolved = resolve_speech_provider_name(name)
-    cached = _speech_provider_cache.get(resolved)
+    cache_key = resolved
+    if resolved == "cloud":
+        cache_key = f"cloud:{resolve_speech_cloud_config(name)['label']}"
+    cached = _speech_provider_cache.get(cache_key)
     if cached is not None:
         return cached
     mapping = {
@@ -264,13 +319,14 @@ def get_speech_provider(name: str | None = None) -> SpeechProvider:
         "whisper": WhisperSpeechProvider,
         "cloud": CloudSpeechProvider,
         "openai": CloudSpeechProvider,
+        "groq": CloudSpeechProvider,
     }
     provider_cls = mapping.get(resolved)
     if provider_cls is None:
         raise ValueError(f"Unsupported SPEECH_PROVIDER: {name or settings.speech_provider}.")
     instance = provider_cls()
     if resolved == "cloud":
-        instance.name = "cloud"
-    _speech_provider_cache[resolved] = instance
+        instance.name = resolve_speech_cloud_config(name)["label"] or "cloud"
+    _speech_provider_cache[cache_key] = instance
     logger.info("Speech provider ready requested=%s resolved=%s", name or settings.speech_provider, instance.name)
     return instance
