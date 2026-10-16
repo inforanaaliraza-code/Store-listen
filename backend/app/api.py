@@ -54,6 +54,7 @@ from app.providers.speech import (
     normalize_supported_language,
     resolve_speech_provider_name,
 )
+from app.providers.speech_quality import is_recent_duplicate
 from app.security import create_access_token, current_user, decode_token, hash_device_secret, new_device_secret, verify_password
 from app.services.demo_live import run_live_demo
 from app.services.events import hub
@@ -1446,9 +1447,22 @@ async def transcribe_audio(
         logger.exception("Speech transcription failed store_id=%s provider=%s", store_id, provider.name)
         raise HTTPException(502, "Speech transcription failed. Check audio format and SPEECH_PROVIDER / API key configuration.") from exc
 
+    if is_recent_duplicate(conversation.id, result.original_text):
+        transcription_ms = round((perf_counter() - transcription_started) * 1000)
+        return {
+            "conversation_id": conversation.id,
+            "segment": None,
+            "speech_provider": provider.name,
+            "analysis": None,
+            "analysis_status": "no_speech",
+            "transcription_ms": transcription_ms,
+            "raw_audio_stored": True,
+            "audio_recording_id": audio_recording.id,
+        }
+
     segment_id = f"seg-{uuid4().hex[:12]}"
     safe_speaker_id = "speaker-customer" if speaker_role == "customer" else f"speaker-{employee.id}" if employee else "speaker-unknown"
-    speaker_label = f"Staff: {employee.full_name} (operator selected)" if employee else "Customer (operator selected)" if speaker_role == "customer" else "Speaker not identified"
+    speaker_label = f"Staff: {employee.full_name} (operator selected)" if employee else "Customer (operator selected)" if speaker_role == "customer" else "Speaker"
     participant = (
         db.query(ConversationParticipant)
         .filter(

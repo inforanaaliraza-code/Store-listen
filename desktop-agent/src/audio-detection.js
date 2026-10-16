@@ -1,19 +1,19 @@
 (function initializeVoiceDetection(globalScope) {
   const config = Object.freeze({
-    // Slightly stricter gate so silence/noise does not become "Thank you" hallucinations.
-    minRms: 0.008,
-    rmsThreshold: 0.01,
-    peakThreshold: 0.04,
-    snr: 1.8,
-    minSpeechRatio: 0.28,
+    // Premium gate: only sustained clear speech — skip noise that Whisper invents words for.
+    minRms: 0.01,
+    rmsThreshold: 0.012,
+    peakThreshold: 0.05,
+    snr: 2.1,
+    minSpeechRatio: 0.32,
     minZcr: 0.012,
-    maxZcr: 0.42,
-    startFrames: 3,
-    endFrames: 8,
-    silenceHangoverMs: 520,
+    maxZcr: 0.4,
+    startFrames: 4,
+    endFrames: 9,
+    silenceHangoverMs: 580,
     // Longer phrases = more real speech context for accurate STT.
-    maxSegmentMs: 4200,
-    minClipMs: 650,
+    maxSegmentMs: 4800,
+    minClipMs: 900,
     previewIntervalMs: 4500,
     livePreviewEnabled: false,
   });

@@ -23,8 +23,10 @@
         capturedAt: new Date(entry.capturedAt),
         segment: entry.segment && typeof entry.segment === 'object' ? {
           ...entry.segment,
-          speakerLabel: entry.segment.speakerLabel === 'Speaker not identified'
-            ? 'Unattributed speaker'
+          speakerLabel: !entry.segment.speakerLabel
+            || entry.segment.speakerLabel === 'Speaker not identified'
+            || entry.segment.speakerLabel === 'Unattributed speaker'
+            ? 'Speaker'
             : entry.segment.speakerLabel,
         } : entry.segment,
       })) : [],
@@ -57,7 +59,12 @@
     ];
     session.entries.slice().sort((left, right) => left.number - right.number).forEach((entry) => {
       const segment = entry.segment;
-      lines.push(`${entry.number}. ${new Date(entry.capturedAt).toLocaleTimeString()} | ${segment.speakerLabel || 'Unattributed speaker'} | ${(segment.language || 'und').toUpperCase()}`);
+      const speaker = !segment.speakerLabel
+        || segment.speakerLabel === 'Speaker not identified'
+        || segment.speakerLabel === 'Unattributed speaker'
+        ? 'Speaker'
+        : segment.speakerLabel;
+      lines.push(`${entry.number}. ${new Date(entry.capturedAt).toLocaleTimeString()} | ${speaker} | ${(segment.language || 'und').toUpperCase()}`);
       lines.push(segment.originalText || 'No speech recognized.');
       if (segment.translatedText && segment.translatedText !== segment.originalText) lines.push(`Translation: ${segment.translatedText}`);
       lines.push('');

@@ -245,7 +245,9 @@ export default function LivePage() {
     const recovered = transcript.segments.map((segment) => ({
       id: segment.id,
       conversationId: conversation.id,
-      speaker: segment.speaker_label || 'Speaker not identified',
+      speaker: segment.speaker_label === 'Speaker not identified' || segment.speaker_label === 'Unattributed speaker'
+        ? 'Speaker'
+        : (segment.speaker_label || 'Speaker'),
       language: segment.language,
       original: segment.original_text,
       translated: segment.translated_text || segment.original_text,

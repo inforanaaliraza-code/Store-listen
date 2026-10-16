@@ -88,7 +88,8 @@ test('normalizes legacy speaker attribution wording in saved transcripts', () =>
   }]);
   const text = transcriptText('Store 001', 'Front PC', session);
 
-  assert.equal(session.entries[0].segment.speakerLabel, 'Unattributed speaker');
-  assert.match(text, /Unattributed speaker/);
+  assert.equal(session.entries[0].segment.speakerLabel, 'Speaker');
+  assert.match(text, /Speaker/);
   assert.doesNotMatch(text, /Speaker not identified/);
+  assert.doesNotMatch(text, /Unattributed speaker/);
 });

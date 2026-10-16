@@ -13,6 +13,7 @@ from app.providers.speech_quality import (
     is_hallucinated_transcript,
     looks_like_spanish,
     normalize_language,
+    polish_spanish_translation,
     sanitize_transcript,
 )
 
@@ -59,12 +60,8 @@ GROQ_DEFAULT_MODEL = "whisper-large-v3"
 GROQ_TRANSLATE_MODEL = "whisper-large-v3"
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini-transcribe"
 
-# Bias Whisper away from YouTube-style filler on quiet store clips.
-_STT_PROMPT = (
-    "Retail store conversation between a customer and an employee. "
-    "Transcribe only clear spoken English or Spanish words. "
-    "Do not invent phrases like thank you, thanks for watching, or subscribe."
-)
+# Do not send instructional prompt text — Whisper often echoes it into the transcript.
+_STT_PROMPT = ""
 
 
 def resolve_speech_api_key() -> str:
@@ -121,16 +118,15 @@ def _finalize_transcript(original: str, language: str | None, hint: str | None) 
     if not text or is_hallucinated_transcript(text):
         raise NoSpeechDetected("No clear English or Spanish speech was detected in this audio clip.")
 
+    # Short clear Spanish store phrases win over a wrong Whisper language tag (e.g. Gracias→en).
+    if looks_like_spanish(text):
+        return text, "es"
+
     raw = (language or "").lower().replace("_", "-").split("-")[0] if language else None
     if raw and raw not in SUPPORTED_LANGUAGES and raw not in {"und", "auto", ""}:
-        # Model explicitly detected a non-store language — reject unless the text is clearly Spanish.
-        if looks_like_spanish(text):
-            return text, "es"
         raise UnsupportedLanguageDetected(raw)
 
-    detected = normalize_supported_language(language) or hint
-    if detected is None:
-        detected = "es" if looks_like_spanish(text) else "en"
+    detected = normalize_supported_language(language) or hint or "en"
     if detected not in SUPPORTED_LANGUAGES:
         raise UnsupportedLanguageDetected(detected)
     return text, detected
@@ -202,7 +198,7 @@ class WhisperSpeechProvider(SpeechProvider):
 
     @staticmethod
     def _transcribe_kwargs(language_hint: str | None) -> dict:
-        return {
+        kwargs = {
             "language": normalize_supported_language(language_hint),
             "beam_size": settings.whisper_beam_size,
             "best_of": 1,
@@ -214,8 +210,10 @@ class WhisperSpeechProvider(SpeechProvider):
             "compression_ratio_threshold": 2.2,
             "no_speech_threshold": 0.65,
             "patience": 0.8,
-            "initial_prompt": _STT_PROMPT,
         }
+        if _STT_PROMPT:
+            kwargs["initial_prompt"] = _STT_PROMPT
+        return kwargs
 
     def transcribe(self, audio_chunk: bytes, language_hint: str | None = None) -> SpeechResult:
         suffix = ".webm"
@@ -248,11 +246,10 @@ class WhisperSpeechProvider(SpeechProvider):
                 task="translate",
                 **{**self._transcribe_kwargs("en"), "language": "en"},
             )
-            translated = sanitize_transcript(
-                " ".join(segment.text.strip() for segment in translations)
-            ) or original
-            if is_hallucinated_transcript(translated):
-                translated = original
+            translated = polish_spanish_translation(
+                original,
+                sanitize_transcript(" ".join(segment.text.strip() for segment in translations)) or original,
+            )
         return SpeechResult(original, language, translated, confidence, True, "spk-unassigned")
 
 
@@ -289,9 +286,10 @@ class CloudSpeechProvider(SpeechProvider):
             kwargs: dict = {
                 "model": model,
                 "file": (filename, audio_file),
-                "prompt": _STT_PROMPT,
                 "temperature": 0,
             }
+            if _STT_PROMPT:
+                kwargs["prompt"] = _STT_PROMPT
             if "whisper" in model:
                 kwargs["response_format"] = "verbose_json"
             else:
@@ -371,19 +369,21 @@ class CloudSpeechProvider(SpeechProvider):
         path = Path(audio_path)
 
         # Auto-detect first unless the operator forced EN/ES.
+        # Never retry on hallucinated filler (Tchau/Obrigado/Thank you) — a second pass
+        # on the same noise usually invents a different fake word.
         original, detected = self._transcribe_once(client, model, path, language=hint)
-        if not original or is_hallucinated_transcript(original):
-            # Retry once with the opposite language bias when auto result is junk.
-            retry_lang = "es" if hint != "es" else "en"
-            if hint is None:
-                alt_text, alt_lang = self._transcribe_once(client, model, path, language=retry_lang)
-                if alt_text and not is_hallucinated_transcript(alt_text):
-                    original, detected = alt_text, alt_lang or retry_lang
+        if not original and hint is None:
+            alt_text, alt_lang = self._transcribe_once(client, model, path, language="es")
+            if alt_text and not is_hallucinated_transcript(alt_text):
+                original, detected = alt_text, alt_lang or "es"
 
         original, language = _finalize_transcript(original, detected, hint)
         translated = original
         if language == "es" and settings.whisper_translate_spanish:
-            translated = self._translate_to_english(client, config, path, original)
+            translated = polish_spanish_translation(
+                original,
+                self._translate_to_english(client, config, path, original),
+            )
 
         self.name = config["label"] or "cloud"
         logger.info(

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
+import time
 from collections import Counter
 
 # Store capture only supports English and Spanish.
 SUPPORTED_LANGUAGES = frozenset({"en", "es"})
 
-# Classic Whisper empty-audio / YouTube hallucinations.
+# Classic Whisper empty-audio / YouTube / multilingual filler.
 _HALLUCINATION_EXACT = frozenset(
     {
         "thank you",
@@ -30,6 +31,23 @@ _HALLUCINATION_EXACT = frozenset(
         "amara.org",
         "subtitles by",
         "translated by",
+        "tchau",
+        "chao",
+        "obrigado",
+        "obrigada",
+        "adeus",
+        "valeu",
+        "okay",
+        "ok",
+        "hmm",
+        "uh",
+        "um",
+        "ah",
+        "yeah",
+        "yep",
+        "mhm",
+        "mm",
+        "mmm",
     }
 )
 
@@ -43,9 +61,84 @@ _HALLUCINATION_CONTAINS = (
     "translated by the",
     "♪",
     "🎵",
+    "transcribe only",
+    "clear spoken english",
+    "spoken english or spanish",
+    "do not invent phrases",
+    "retail store conversation",
+    "between a customer and an employee",
+    "thanks for watching or subscribe",
+)
+
+# Portuguese / other-language tokens Whisper invents on noise (not EN/ES store speech).
+_PORTUGUESE_OR_FOREIGN_TOKENS = frozenset(
+    {
+        "tchau",
+        "obrigado",
+        "obrigada",
+        "adeus",
+        "valeu",
+        "voce",
+        "você",
+        "nao",
+        "não",
+        "pra",
+        "porque",
+        "então",
+        "entao",
+        "ciao",
+        "grazie",
+        "bonjour",
+        "merci",
+        "danke",
+        "arigato",
+        "namaste",
+        "shukriya",
+        "shukria",
+    }
+)
+
+# Clear short Spanish store phrases that are allowed alone.
+_ALLOWED_SHORT_ES = {
+    "hola": "Hello",
+    "gracias": "Thank you",
+    "adios": "Goodbye",
+    "adiós": "Goodbye",
+    "si": "Yes",
+    "sí": "Yes",
+    "no": "No",
+    "bueno": "Okay",
+    "buenas": "Good day",
+    "buenos": "Good day",
+    "perdon": "Excuse me",
+    "perdón": "Excuse me",
+    "ayuda": "Help",
+    "claro": "Of course",
+}
+
+_ALLOWED_SHORT_EN = frozenset(
+    {
+        "hello",
+        "hi",
+        "yes",
+        "no",
+        "please",
+        "sorry",
+        "help",
+        "charger",
+        "phone",
+        "iphone",
+        "cable",
+        "price",
+        "thanks",  # alone still often junk — handled via exact set above first
+    }
 )
 
 _WORD_RE = re.compile(r"[a-záéíóúüñ']+", re.IGNORECASE)
+
+# Recent identical lines per conversation (process-local anti-spam).
+_RECENT_LINES: dict[str, tuple[str, float]] = {}
+_RECENT_TTL_SEC = 18.0
 
 
 def normalize_language(language: str | None) -> str | None:
@@ -63,6 +156,9 @@ def _normalize_phrase(text: str) -> str:
 def looks_like_spanish(text: str) -> bool:
     lowered = (text or "").lower()
     if any(marker in lowered for marker in ("¿", "¡", "ñ", "á", "é", "í", "ó", "ú", "ü")):
+        return True
+    phrase = _normalize_phrase(text)
+    if phrase in _ALLOWED_SHORT_ES:
         return True
     spanish_hits = (
         "hola",
@@ -91,9 +187,24 @@ def looks_like_spanish(text: str) -> bool:
         "esa",
         "como",
         "cómo",
+        "adios",
+        "adiós",
     )
     words = set(_WORD_RE.findall(lowered))
     return sum(1 for token in spanish_hits if token in words or token in lowered) >= 2
+
+
+def looks_like_foreign_non_store(text: str) -> bool:
+    words = {w.lower() for w in _WORD_RE.findall(text or "")}
+    if not words:
+        return False
+    # Any Portuguese/foreign token without clear Spanish context → reject.
+    foreign_hits = words & _PORTUGUESE_OR_FOREIGN_TOKENS
+    if foreign_hits and not looks_like_spanish(text):
+        return True
+    if foreign_hits and len(words) <= 2:
+        return True
+    return False
 
 
 def is_hallucinated_transcript(text: str) -> bool:
@@ -106,24 +217,54 @@ def is_hallucinated_transcript(text: str) -> bool:
     for marker in _HALLUCINATION_CONTAINS:
         if marker in phrase:
             return True
+    if looks_like_foreign_non_store(text):
+        return True
 
     words = _WORD_RE.findall(phrase)
     if not words:
         return True
 
-    # "Thank you. Thank you. Thank you." / single-token spam
-    counts = Counter(word.lower() for word in words)
-    top_word, top_count = counts.most_common(1)[0]
-    if top_word in {"thank", "thanks", "you", "bye", "okay", "ok", "uh", "um", "ah"} and top_count >= 3:
-        return True
-    if len(words) >= 4 and top_count / len(words) >= 0.6 and top_word in {"thank", "thanks", "you"}:
-        return True
-    if len(set(w.lower() for w in words)) == 1 and len(words) >= 2:
-        return True
+    lowered_words = [word.lower() for word in words]
 
-    # Extreme repetition of a short 1–2 word phrase
+    # Single unclear/filler token (unless allow-listed Spanish/English store word).
+    if len(lowered_words) == 1:
+        token = lowered_words[0]
+        if token in _PORTUGUESE_OR_FOREIGN_TOKENS:
+            return True
+        if token in _HALLUCINATION_EXACT:
+            return True
+        if token in _ALLOWED_SHORT_ES:
+            return False
+        if token in _ALLOWED_SHORT_EN and token not in {"thanks", "thank"}:
+            return False
+        # Unknown one-word clips are usually Whisper noise inventions.
+        if len(token) <= 6:
+            return True
+
+    counts = Counter(lowered_words)
+    top_word, top_count = counts.most_common(1)[0]
+    spam_tokens = {
+        "thank",
+        "thanks",
+        "you",
+        "bye",
+        "okay",
+        "ok",
+        "uh",
+        "um",
+        "ah",
+        "tchau",
+        "obrigado",
+        "obrigada",
+    }
+    if top_word in spam_tokens and top_count >= 2:
+        return True
+    if len(words) >= 4 and top_count / len(words) >= 0.55 and top_word in spam_tokens:
+        return True
+    if len(set(lowered_words)) == 1 and len(words) >= 2:
+        return True
     if len(words) >= 6:
-        unique_ratio = len(set(w.lower() for w in words)) / len(words)
+        unique_ratio = len(set(lowered_words)) / len(words)
         if unique_ratio <= 0.25:
             return True
     return False
@@ -132,3 +273,38 @@ def is_hallucinated_transcript(text: str) -> bool:
 def sanitize_transcript(text: str) -> str:
     cleaned = " ".join((text or "").split()).strip(" \t\n\r.-")
     return cleaned
+
+
+def polish_spanish_translation(original: str, translated: str) -> str:
+    """Keep staff EN line honest for short Spanish; drop unrelated invents."""
+    phrase = _normalize_phrase(original)
+    if phrase in _ALLOWED_SHORT_ES:
+        return _ALLOWED_SHORT_ES[phrase]
+    translated_clean = sanitize_transcript(translated)
+    if not translated_clean or is_hallucinated_transcript(translated_clean):
+        return sanitize_transcript(original)
+    orig_words = _WORD_RE.findall(phrase)
+    trans_words = _WORD_RE.findall(_normalize_phrase(translated_clean))
+    # One Spanish word must not become a long invented English sentence.
+    if len(orig_words) <= 2 and len(trans_words) >= 6:
+        return sanitize_transcript(original)
+    return translated_clean
+
+
+def is_recent_duplicate(conversation_id: str | None, text: str) -> bool:
+    """Drop the same line if Whisper spam-repeats it within a few seconds."""
+    if not conversation_id:
+        return False
+    phrase = _normalize_phrase(text)
+    if not phrase:
+        return False
+    now = time.monotonic()
+    # Prune stale keys opportunistically.
+    stale = [key for key, (_, seen_at) in _RECENT_LINES.items() if now - seen_at > _RECENT_TTL_SEC * 3]
+    for key in stale:
+        _RECENT_LINES.pop(key, None)
+    previous = _RECENT_LINES.get(conversation_id)
+    if previous and previous[0] == phrase and (now - previous[1]) <= _RECENT_TTL_SEC:
+        return True
+    _RECENT_LINES[conversation_id] = (phrase, now)
+    return False

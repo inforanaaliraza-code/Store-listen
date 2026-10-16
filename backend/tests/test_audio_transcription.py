@@ -92,7 +92,10 @@ def test_whisper_rejects_languages_outside_english_and_spanish(monkeypatch, tmp_
 
     class FrenchModel:
         def transcribe(self, audio_path, **kwargs):
-            segment = SimpleNamespace(text="bonjour", avg_logprob=-0.1)
+            segment = SimpleNamespace(
+                text="Je voudrais acheter un telephone s'il vous plait",
+                avg_logprob=-0.1,
+            )
             return iter([segment]), SimpleNamespace(language="fr")
 
     monkeypatch.setattr(WhisperSpeechProvider, "_get_model", lambda _self: FrenchModel())
@@ -564,7 +567,7 @@ def test_unknown_audio_role_is_not_assigned_to_customer(monkeypatch):
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["segment"]["speakerLabel"] == "Speaker not identified"
+    assert response.json()["segment"]["speakerLabel"] == "Speaker"
     assert response.json()["transcription_ms"] >= 0
     assert response.json()["analysis"] is None
     assert response.json()["analysis_status"] == "speaker_unattributed"

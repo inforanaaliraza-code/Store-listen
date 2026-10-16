@@ -75,36 +75,74 @@
           <div class="topbar-right"><span class="topbar-store" id="topbarStore">Store</span><span class="topbar-divider"></span><span class="device-status" id="deviceStatus"><i></i><span>Connected</span></span><button class="icon-button" id="settingsButton" aria-label="Device settings" title="Device settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.7 2.94-.09-.03a1.7 1.7 0 0 0-1.8.3l-.07.06h-3.4l-.02-.1a1.7 1.7 0 0 0-1.3-1.3l-.1-.02-2.94 1.7-.06-.07a1.7 1.7 0 0 0-1.88-.34l-.08.04-2.94-1.7.03-.09a1.7 1.7 0 0 0-.3-1.8l-.06-.07v-3.4l.1-.02a1.7 1.7 0 0 0 1.3-1.3l.02-.1-1.7-2.94.07-.06a1.7 1.7 0 0 0 .34-1.88l-.04-.08 1.7-2.94.09.03a1.7 1.7 0 0 0 1.8-.3l.07-.06h3.4l.02.1a1.7 1.7 0 0 0 1.3 1.3l.1.02 2.94-1.7.06.07a1.7 1.7 0 0 0 1.88.34l.08-.04 2.94 1.7-.03.09a1.7 1.7 0 0 0 .3 1.8l.06.07v3.4l-.1.02a1.7 1.7 0 0 0-1.3 1.3l-.02.1 1.7 2.94-.07.06a1.7 1.7 0 0 0-.34 1.88z"/></svg></button></div>
         </header>
 
-        <section class="page-content workspace-view" id="captureView">
-          <div class="page-heading"><div><p class="eyebrow">LIVE CONVERSATION <span class="heading-date" id="currentDate"></span></p><h1>Live capture</h1><p>Recording and transcript delivery for this store.</p></div><div class="capture-heading-controls"><label class="mic-select"><span>MICROPHONE INPUT</span><select id="microphoneSelect"><option value="">System default</option></select></label><div class="header-device"><span class="header-device-icon"><svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 7h6M9 17h6"/></svg></span><span><small>ACTIVE DEVICE</small><strong id="headerDeviceName">Desktop device</strong></span></div></div></div>
+        <section class="page-content capture-page workspace-view" id="captureView">
+          <article class="capture-bar" id="captureHero">
+            <div class="capture-bar-status">
+              <span class="live-indicator" id="captureIndicator"><i></i><span>READY</span></span>
+              <div class="capture-bar-copy">
+                <strong id="captureTitle">Ready to capture</strong>
+                <p id="captureMessage">Pick a mic and start. English &amp; Spanish lines appear below.</p>
+              </div>
+              <span class="capture-session" id="sessionTime">00:00:00</span>
+            </div>
+            <div class="capture-bar-controls">
+              <label class="mic-select"><span>MIC</span><select id="microphoneSelect"><option value="">Default microphone</option></select></label>
+              <div class="capture-mic-status"><strong id="micStatus"><i class="status-dot neutral"></i>Idle</strong><small id="apiStatus"><i class="status-dot"></i>Checking</small></div>
+              <button class="capture-button" id="captureButton" type="button"><span class="capture-button-icon"><svg id="captureButtonIcon" viewBox="0 0 24 24"><path d="M12 3v12M8 7v7a4 4 0 0 0 8 0V7M5 12a7 7 0 0 0 14 0M12 19v3M9 22h6"/></svg></span><span id="captureButtonLabel">Start</span></button>
+            </div>
+            <div class="stats-strip">
+              <div class="stat-cell"><span>LINES</span><strong id="transcriptCount">0</strong></div>
+              <div class="stat-cell"><span>TIME</span><strong id="sessionStat">00:00</strong></div>
+              <div class="stat-cell"><span>DELIVERY</span><strong id="deliveryStat"><i class="stat-dot"></i>Ready</strong></div>
+              <div class="stat-cell header-device-inline"><span>DEVICE</span><strong id="headerDeviceName">Desktop</strong></div>
+            </div>
+          </article>
+          <p class="capture-error" id="captureError" role="alert" hidden></p>
+          <span class="heading-date" id="currentDate" hidden></span>
 
           <div class="capture-grid">
-            <section class="capture-column">
-              <article class="capture-hero" id="captureHero">
-                <div class="hero-topline"><span class="live-indicator" id="captureIndicator"><i></i><span>CAPTURE PAUSED</span></span><span class="capture-session" id="sessionTime">00:00:00</span></div>
-                <div class="hero-message"><h2 id="captureTitle">Ready when you are.</h2><p id="captureMessage">Choose the store microphone and start a secure capture session.</p></div>
-                <div class="signal-wrap" aria-hidden="true"><div class="signal-line"></div><div class="signal-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
-                <footer class="capture-controls"><div class="capture-mic-status"><span><strong id="micStatus"><i class="status-dot neutral"></i>Not active</strong><small id="apiStatus"><i class="status-dot"></i>Checking connection</small></span></div><button class="capture-button" id="captureButton"><span class="capture-button-icon"><svg id="captureButtonIcon" viewBox="0 0 24 24"><path d="M12 3v12M8 7v7a4 4 0 0 0 8 0V7M5 12a7 7 0 0 0 14 0M12 19v3M9 22h6"/></svg></span><span id="captureButtonLabel">Start recording</span></button></footer>
-              </article>
-              <div class="stats-strip"><div class="stat-cell"><span>TRANSCRIPTS</span><strong id="transcriptCount">0</strong></div><div class="stat-cell"><span>SESSION TIME</span><strong id="sessionStat">00:00</strong></div><div class="stat-cell"><span>DELIVERY</span><strong id="deliveryStat"><i class="stat-dot"></i>Ready</strong></div></div>
-
-              <article class="transcript-panel">
-                <header class="section-header"><div><p class="eyebrow">LIVE CONVERSATION</p><h2>Current transcript</h2></div><span class="feed-count" id="feedCount">LIVE · 0</span></header>
-                <div class="transcript-list" id="transcriptList" role="log" aria-live="polite" aria-relevant="additions text"><div class="empty-transcript" id="emptyTranscript"><span class="empty-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><strong>Your transcript appears here</strong><span>Start capture to transcribe conversation audio.</span></div></div>
-              </article>
-            </section>
+            <article class="transcript-panel">
+              <header class="section-header">
+                <div><p class="eyebrow">LIVE CONVERSATION</p><h2>Current transcript</h2></div>
+                <span class="feed-count" id="feedCount">LIVE · 0</span>
+              </header>
+              <div class="transcript-list" id="transcriptList" role="log" aria-live="polite" aria-relevant="additions text">
+                <div class="empty-transcript" id="emptyTranscript">
+                  <span class="empty-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                  <strong>Conversation lines appear here</strong>
+                  <span>Spanish lines include an English translation for staff.</span>
+                </div>
+              </div>
+            </article>
 
             <aside class="insight-column">
-              <article class="connection-panel">
-                <div class="connection-heading"><span class="connection-icon"><svg viewBox="0 0 24 24"><path d="M5 12.5a10 10 0 0 1 14 0M8 15.5a6 6 0 0 1 8 0M11 18.5a2 2 0 0 1 2 0"/><circle cx="12" cy="20" r=".8" fill="currentColor" stroke="none"/></svg></span><div><p class="eyebrow">SECURE CONNECTION</p><h2>Device health</h2></div></div>
-                <div class="connection-status-row"><span>Last transcript</span><strong id="lastTranscript">—</strong></div>
-                <div class="connection-foot"><span class="foot-lock">✓</span><span>Device traffic is protected in transit.</span></div>
-              </article>
-              <article class="privacy-panel"><span class="privacy-mark"><svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.6 2.8 8 7 10 4.2-2 7-5.4 7-10V6l-7-3z"/><path d="m9 12 2 2 4-4"/></svg></span><div><p class="eyebrow">PRIVACY & ATTRIBUTION</p><h3>Shared microphone</h3><p>Speaker attribution is not automatic. Audio remains unattributed until a reviewer assigns a role.</p><p class="privacy-retention">Audio retention follows your organization’s server settings.</p></div></article>
-              <article class="device-details"><p class="eyebrow">DEVICE DETAILS</p><div><span>Device ID</span><code id="deviceIdText">—</code></div><div><span>Store</span><strong id="detailStore">—</strong></div><div><span>API host</span><strong id="apiHost">—</strong></div></article>
+              <details class="insight-card" open>
+                <summary>Connection</summary>
+                <div class="connection-panel">
+                  <div class="connection-status-row"><span>Last line</span><strong id="lastTranscript">—</strong></div>
+                  <div class="connection-foot"><span class="foot-lock">✓</span><span>Encrypted in transit</span></div>
+                </div>
+              </details>
+              <details class="insight-card">
+                <summary>Device</summary>
+                <article class="device-details">
+                  <div><span>Device ID</span><code id="deviceIdText">—</code></div>
+                  <div><span>Store</span><strong id="detailStore">—</strong></div>
+                  <div><span>API host</span><strong id="apiHost">—</strong></div>
+                </article>
+              </details>
+              <details class="insight-card">
+                <summary>Privacy</summary>
+                <article class="privacy-panel">
+                  <div>
+                    <h3>Shared microphone</h3>
+                    <p>Speaker roles stay unattributed until a reviewer assigns them.</p>
+                    <p class="privacy-retention">Audio retention follows your org settings.</p>
+                  </div>
+                </article>
+              </details>
             </aside>
           </div>
-          <footer class="workspace-footer"><span>STORE LISTEN <span class="footer-separator">/</span> EDGE AGENT</span><span>TRANSCRIPTS SYNC TO AUTHORIZED STORE USERS</span></footer>
         </section>
         <section class="page-content transcript-view workspace-view" id="transcriptView" hidden>
           <div class="page-heading transcript-page-heading">

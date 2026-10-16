@@ -333,13 +333,14 @@ function connectHealth() {
 
 function setCaptureUi(recording, busy = false, ended = false) {
   const hero = $('#captureHero');
-  hero.classList.toggle('recording', recording);
-  $('#captureIndicator span').textContent = recording ? 'RECORDING' : busy ? 'STOPPING SESSION' : ended ? 'SESSION ENDED' : 'RECORDING PAUSED';
-  $('#captureTitle').textContent = recording ? 'Live conversation' : busy ? 'Finishing this session.' : ended ? 'Session ended.' : 'Ready when you are.';
+  if (hero) hero.classList.toggle('recording', recording);
+  const indicator = $('#captureIndicator span');
+  if (indicator) indicator.textContent = recording ? 'LIVE' : busy ? 'SAVING' : ended ? 'ENDED' : 'READY';
+  $('#captureTitle').textContent = recording ? 'Listening' : busy ? 'Saving…' : ended ? 'Session saved' : 'Ready to capture';
   $('#captureMessage').textContent = recording
-    ? 'Speech is detected in milliseconds; each short phrase is sent as soon as you pause.'
-    : busy ? 'Microphone is off. Completing queued transcripts and closing the conversation.' : ended ? 'The final transcript and recording are saved to conversation history.' : 'Choose the store microphone and start a secure capture session.';
-  $('#captureButtonLabel').textContent = recording ? 'Stop Recording' : busy ? 'Saving transcript…' : 'Start recording';
+    ? 'English & Spanish lines appear as you speak.'
+    : busy ? 'Finishing uploads…' : ended ? 'Start again for the next conversation.' : 'Pick a mic and start.';
+  $('#captureButtonLabel').textContent = recording ? 'Stop' : busy ? 'Saving…' : 'Start';
   $('#captureButton').classList.toggle('stopping', recording);
   $('#captureButton').disabled = busy;
   $('#microphoneSelect').disabled = recording || busy;
@@ -359,9 +360,7 @@ function createTranscriptItem(segment, capturedAt, number) {
   meta.className = 'transcript-meta';
   const speaker = document.createElement('span');
   speaker.className = 'transcript-speaker';
-  speaker.textContent = segment.speakerLabel === 'Speaker not identified'
-    ? 'Unattributed speaker'
-    : segment.speakerLabel || 'Unattributed speaker';
+  speaker.textContent = normalizeSpeakerLabel(segment.speakerLabel);
   const time = document.createElement('time');
   time.className = 'transcript-time';
   time.textContent = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(capturedAt);
@@ -414,9 +413,11 @@ async function downloadTranscript(session, format) {
       entries: session.entries.slice().sort((left, right) => left.number - right.number).map((entry) => ({
         number: entry.number,
         time: entry.capturedAt.toLocaleTimeString(),
-        speaker: entry.segment.speakerLabel === 'Speaker not identified'
-          ? 'Unattributed speaker'
-          : entry.segment.speakerLabel || 'Unattributed speaker',
+        speaker: !entry.segment.speakerLabel
+          || entry.segment.speakerLabel === 'Speaker not identified'
+          || entry.segment.speakerLabel === 'Unattributed speaker'
+          ? 'Speaker'
+          : entry.segment.speakerLabel,
         language: entry.segment.language || 'und',
         originalText: entry.segment.originalText || 'No speech recognized.',
         translatedText: entry.segment.translatedText || '',
@@ -559,11 +560,43 @@ function renderLiveTranscript(session, partialText = '', isTranscribing = false)
   list.scrollTop = list.scrollHeight;
 }
 
+function normalizeSpeakerLabel(label) {
+  if (!label || label === 'Speaker not identified' || label === 'Unattributed speaker') return 'Speaker';
+  return label;
+}
+
+const CLIENT_JUNK_EXACT = new Set([
+  'tchau', 'chao', 'obrigado', 'obrigada', 'adeus', 'valeu', 'ciao',
+  'thank you', 'thanks', 'bye', 'goodbye', 'okay', 'ok', 'hmm', 'uh', 'um', 'yeah',
+]);
+
+function isClientJunkTranscript(text) {
+  const phrase = (text || '').toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!phrase) return true;
+  if (CLIENT_JUNK_EXACT.has(phrase)) return true;
+  const words = phrase.split(' ').filter(Boolean);
+  if (words.length === 1 && words[0].length <= 6 && !['hola', 'gracias', 'adios', 'adiós', 'si', 'sí', 'no', 'hello', 'hi', 'yes', 'please', 'sorry', 'help'].includes(words[0])) {
+    return true;
+  }
+  return false;
+}
+
 function addTranscript(segment) {
   const session = state.capture?.session;
   if (!session) return;
+  const text = (segment.originalText || '').trim();
+  if (!text || isClientJunkTranscript(text)) return;
+  const last = session.entries[session.entries.length - 1];
+  if (last?.segment?.originalText?.trim().toLowerCase() === text.toLowerCase()) {
+    const lastAt = last.capturedAt?.getTime?.() || 0;
+    if (Date.now() - lastAt < 18_000) return;
+  }
   const capturedAt = new Date();
-  const entry = { number: session.entries.length + 1, segment, capturedAt };
+  const entry = {
+    number: session.entries.length + 1,
+    segment: { ...segment, speakerLabel: normalizeSpeakerLabel(segment.speakerLabel) },
+    capturedAt,
+  };
   session.entries.push(entry);
   if (state.capture) state.capture.latestPreviewText = '';
   saveTranscriptArchive();

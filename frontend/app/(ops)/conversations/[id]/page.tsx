@@ -273,7 +273,9 @@ export default function ConversationDetailPage() {
               {speakerError ? <p className="error analysis-action-error" role="alert">{speakerError}</p> : null}
               {segments.map((segment) => {
                 const speakerRole = segment.speaker_role || (segment.speaker_id === 'speaker-customer' ? 'customer' : segment.speaker_id.startsWith('speaker-employee-') ? 'employee' : 'unknown');
-                const speaker = segment.speaker_label || (speakerRole === 'customer' ? 'Customer' : speakerRole === 'employee' ? 'Representative' : 'Speaker not identified');
+                const speaker = segment.speaker_label === 'Speaker not identified' || segment.speaker_label === 'Unattributed speaker'
+                  ? 'Speaker'
+                  : (segment.speaker_label || (speakerRole === 'customer' ? 'Customer' : speakerRole === 'employee' ? 'Representative' : 'Speaker'));
                 const customer = speakerRole === 'customer';
                 return <div className={`analysis-message ${customer ? 'customer' : 'representative'}`} key={segment.id}>
                   <div className="analysis-message-meta">
