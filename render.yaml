@@ -26,11 +26,11 @@ services:
       - key: SESSION_SECRET
         generateValue: true
       - key: API_BASE_URL
-        value: https://store-listen-api.onrender.com
+        value: https://store-listen-api-z8yb.onrender.com
       - key: WEB_BASE_URL
-        value: https://store-listen-web.onrender.com
+        value: https://store-listen-web-qkkv.onrender.com
       - key: CORS_ORIGINS
-        value: https://store-listen-web.onrender.com
+        value: https://store-listen-web-qkkv.onrender.com
       - key: CORS_ORIGIN_REGEX
         value: ^$
       - key: AI_PROVIDER
@@ -93,6 +93,6 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        value: https://store-listen-api.onrender.com
+        value: https://store-listen-api-z8yb.onrender.com
       - key: VITE_WS_URL
-        value: wss://store-listen-api.onrender.com
+        value: wss://store-listen-api-z8yb.onrender.com

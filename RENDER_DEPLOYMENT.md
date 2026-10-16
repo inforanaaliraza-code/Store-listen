@@ -20,8 +20,8 @@ The root `render.yaml` is the single Blueprint for both services. It does not cr
 2. Connect `inforanaaliraza-code/Store-listen`, choose branch `main`, and select the repository-root `render.yaml`.
 3. Keep the generated plan as Free. When Render prompts for `MONGODB_URI`, paste the Atlas URI in the Render form only. Render generates separate `JWT_SECRET` and `SESSION_SECRET` values.
 4. Apply the Blueprint. It creates both services and deploys them. Wait for `store-listen-api` to become Live before testing the site.
-5. Confirm the API health endpoint responds: `https://store-listen-api.onrender.com/health`. Confirm `/ready` reports `demo` and a connected database.
-6. Open `https://store-listen-web.onrender.com/login`. The Blueprint sets `VITE_API_URL` and `VITE_WS_URL` to the API service, and configures API CORS for this exact frontend origin.
+5. Confirm the API health endpoint responds: `https://store-listen-api-z8yb.onrender.com/health`. Confirm `/ready` reports `demo` and a connected database.
+6. Open `https://store-listen-web-qkkv.onrender.com/login`. The Blueprint sets `VITE_API_URL` and `VITE_WS_URL` to the API service, and configures API CORS for this exact frontend origin.
 
 If Render assigns different `onrender.com` hostnames because those names are already in use, update `API_BASE_URL`, `WEB_BASE_URL`, and `CORS_ORIGINS` on `store-listen-api`, plus `VITE_API_URL` and `VITE_WS_URL` on `store-listen-web`, then redeploy both. CORS origin values must be HTTPS origins only, with no trailing slash. The frontend values are embedded at build time, so changing them requires a frontend redeploy.
 
@@ -49,7 +49,7 @@ Required environment values are declared in `render.yaml`. The only value you mu
 - Build Command: `npm ci && npm run build`
 - Publish Directory: `dist`
 - Rewrite: `/*` to `/index.html` for React Router routes such as `/login` and `/dashboard`
-- Environment: `VITE_API_URL=https://store-listen-api.onrender.com`, `VITE_WS_URL=wss://store-listen-api.onrender.com`
+- Environment: `VITE_API_URL=https://store-listen-api-z8yb.onrender.com`, `VITE_WS_URL=wss://store-listen-api-z8yb.onrender.com`
 
 `frontend/package-lock.json` lets the independent Static Site install the Vite workspace reproducibly. `VITE_*` values are public build-time settings, not secrets.
 
