@@ -203,9 +203,19 @@ export async function apiGetWithRetry<T>(
   }
   throw lastError;
 }
-export const apiPost = <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+export async function apiPost<T>(path: string, body?: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+  const response = await fetchApi(
+    path,
+    { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) },
+    timeoutMs,
+  );
+  redirectAfterUnauthorized(path, response);
+  if (!response.ok) await throwResponseError(response, 'Request failed');
+  return readJson<T>(response);
+}
 export const apiPatch = <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body: body === undefined ? undefined : JSON.stringify(body) });
 export const apiDelete = <T>(path: string) => request<T>(path, { method: 'DELETE' });
+export const BULK_DELETE_TIMEOUT_MS = 120_000;
 
 export async function apiUpload<T>(path: string, form: FormData, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const response = await fetchApi(path, { method: 'POST', body: form }, timeoutMs);

@@ -2,7 +2,7 @@
 
 import Link from '@/lib/router-link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { apiBlob, apiDelete, apiGet, apiPost, type Store } from '../../../lib/api';
+import { apiBlob, apiDelete, apiGet, apiPost, BULK_DELETE_TIMEOUT_MS, type Store } from '../../../lib/api';
 import { useConfirmDialog } from '../../components/confirm-dialog';
 
 type Recording = {
@@ -189,7 +189,7 @@ export default function RecordingsPage() {
       await apiPost('/api/v1/recordings/bulk-delete', {
         recording_ids: selectedIds,
         confirm: 'DELETE',
-      });
+      }, BULK_DELETE_TIMEOUT_MS);
       setSelectedIds([]);
       reload();
     } catch (cause) {
@@ -218,7 +218,7 @@ export default function RecordingsPage() {
         wipe_all: true,
         store_id: storeId || null,
         confirm: 'DELETE ALL RECORDINGS',
-      });
+      }, BULK_DELETE_TIMEOUT_MS);
       setSelectedIds([]);
       setPage(1);
       reload();
