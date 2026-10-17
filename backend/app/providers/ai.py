@@ -7,6 +7,7 @@ import json
 import httpx
 
 from app.config import settings
+from app.providers.groq_chat import groq_chat_completion
 
 @dataclass
 class AnalysisResult:
@@ -214,7 +215,7 @@ class OpenAIAIProvider(AIAnalysisProvider):
         )
 
 
-def _gemini_generate_json(system_instruction: str, input_data: dict, schema: dict, max_output_tokens: int = 1200) -> dict:
+def _gemini_generate_json(system_instruction: str, input_data: dict, schema: dict, max_output_tokens: int = 1200, timeout: float = 45.0) -> dict:
     if not settings.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY is missing. Add a Google AI Studio API key to the backend environment.")
     if settings.ai_provider != "gemini":
@@ -239,7 +240,7 @@ def _gemini_generate_json(system_instruction: str, input_data: dict, schema: dic
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
             headers={"x-goog-api-key": settings.gemini_api_key},
             json=payload,
-            timeout=httpx.Timeout(45.0, connect=5.0),
+            timeout=httpx.Timeout(timeout, connect=5.0),
         )
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
@@ -386,13 +387,13 @@ def _groq_report_json(system_instruction: str, input_data: dict) -> dict:
         from openai import OpenAI
     except ImportError as exc:
         raise RuntimeError("Install backend requirements to enable Groq reports.") from exc
-    completion = OpenAI(
+    client = OpenAI(
         api_key=key,
         base_url="https://api.groq.com/openai/v1",
         timeout=30,
-    ).chat.completions.create(
-        model="llama-3.1-8b-instant",
-        temperature=0,
+    )
+    completion = groq_chat_completion(
+        client,
         response_format={"type": "json_object"},
         messages=[
             {
@@ -428,7 +429,7 @@ def generate_conversation_report(transcript: list[dict[str, str]]) -> Conversati
     gemini_error: Exception | None = None
     if (settings.gemini_api_key or "").strip() and settings.ai_provider == "gemini":
         try:
-            result = _gemini_generate_json(_REPORT_INSTRUCTION, payload, _report_schema(), max_output_tokens=4096)
+            result = _gemini_generate_json(_REPORT_INSTRUCTION, payload, _report_schema(), max_output_tokens=4096, timeout=12.0)
             return _coerce_conversation_report(result, "gemini")
         except Exception as exc:
             gemini_error = exc

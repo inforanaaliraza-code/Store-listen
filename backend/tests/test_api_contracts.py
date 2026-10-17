@@ -412,8 +412,40 @@ def test_conversation_report_falls_back_to_groq_when_gemini_fails(monkeypatch) -
     report = ai.generate_conversation_report([{"role": "unknown", "language": "en", "time_seconds": 0, "text": "I need a charger."}])
     assert report.provider == "groq"
     assert report.customer_needs == ["phone charger"]
-    assert captured["model"] == "llama-3.1-8b-instant"
+    assert captured["model"] == "openai/gpt-oss-20b"
     assert captured["client"]["api_key"] == "groq-test-key"
+
+
+def test_groq_chat_skips_a_retired_model() -> None:
+    from app.providers.groq_chat import groq_chat_completion
+
+    calls = []
+
+    class Message:
+        content = "ok"
+
+    class Choice:
+        message = Message()
+
+    class Completion:
+        choices = [Choice()]
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs["model"])
+            if kwargs["model"] == "openai/gpt-oss-20b":
+                raise RuntimeError("Error code: 404 - {'error': {'code': 'model_not_found'}} The model does not exist")
+            return Completion()
+
+    class Chat:
+        completions = Completions()
+
+    class Client:
+        chat = Chat()
+
+    result = groq_chat_completion(Client(), messages=[{"role": "user", "content": "hi"}])
+    assert calls == ["openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
+    assert result.choices[0].message.content == "ok"
 
 
 def test_gemini_provider_remains_compatible_with_live_clip_analysis(monkeypatch) -> None:

@@ -312,22 +312,23 @@ class CloudSpeechProvider(SpeechProvider):
         return text, detected
 
     def _chat_translate_spanish(self, client, config: dict[str, str], spanish_text: str) -> str:
-        chat_model = "llama-3.1-8b-instant" if config["label"] == "groq" else "gpt-4o-mini"
-        completion = client.chat.completions.create(
-            model=chat_model,
-            temperature=0,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Translate the customer's Spanish retail-store speech into clear, concise English "
-                        "for store staff who do not speak Spanish. "
-                        "Return only the English translation, no quotes or commentary."
-                    ),
-                },
-                {"role": "user", "content": spanish_text},
-            ],
-        )
+        from app.providers.groq_chat import groq_chat_completion
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Translate the customer's Spanish retail-store speech into clear, concise English "
+                    "for store staff who do not speak Spanish. "
+                    "Return only the English translation, no quotes or commentary."
+                ),
+            },
+            {"role": "user", "content": spanish_text},
+        ]
+        if config["label"] == "groq":
+            completion = groq_chat_completion(client, messages=messages)
+        else:
+            completion = client.chat.completions.create(model="gpt-4o-mini", temperature=0, messages=messages)
         return sanitize_transcript(completion.choices[0].message.content or "")
 
     def _translate_to_english(self, client, config: dict[str, str], path: Path, spanish_text: str) -> str:
