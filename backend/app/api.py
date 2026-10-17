@@ -1803,7 +1803,7 @@ def play_audio_recording(recording_id: str, db: Session = Depends(get_db), user:
     try:
         path = resolve_audio_clip(recording.storage_key)
     except FileNotFoundError as exc:
-        raise HTTPException(410, "Audio recording is unavailable") from exc
+        raise HTTPException(410, "This audio is gone. Earlier clips lived on temporary cloud disk and were erased on restart. Record again; new clips are kept in the database and will play back.") from exc
     return FileResponse(path, media_type=recording.content_type, headers={"Cache-Control": "private, no-store"})
 
 

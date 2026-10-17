@@ -318,6 +318,24 @@ def test_api_does_not_save_transcripts_for_unsupported_languages(monkeypatch):
             db.close()
 
 
+def test_audio_clip_is_restored_after_local_disk_is_cleared(tmp_path, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "audio_storage_dir", str(tmp_path))
+    storage_key = save_audio_clip(b"durable-audio", "audio/webm")
+    local_path = resolve_audio_clip(storage_key)
+    local_path.unlink()
+    assert not local_path.exists()
+
+    restored = resolve_audio_clip(storage_key)
+    assert restored.read_bytes() == b"durable-audio"
+
+    delete_audio_clip(storage_key)
+    restored.unlink(missing_ok=True)
+    with pytest.raises(FileNotFoundError):
+        resolve_audio_clip(storage_key)
+
+
 def test_expired_audio_cleanup_removes_file_and_metadata(tmp_path, monkeypatch):
     from app.config import settings
 
