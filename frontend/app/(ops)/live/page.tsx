@@ -19,6 +19,7 @@ type LiveEvent = {
   status?: string;
   label?: string;
   captureSequence?: number;
+  previewSequence?: number;
 };
 
 type Line = {
@@ -141,6 +142,9 @@ export default function LivePage() {
   const pendingByStoreRef = useRef<Record<string, StreamCard>>({});
   const aliveRef = useRef(true);
   const retryRef = useRef<Map<string, number>>(new Map());
+  // Newest finished phrase and newest live-words answer per conversation, so a late answer never repaints.
+  const finalSeqRef = useRef<Map<string, number>>(new Map());
+  const previewSeqRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => { acceptedIdsRef.current = acceptedIds; }, [acceptedIds]);
   useEffect(() => { pendingByStoreRef.current = pendingByStore; }, [pendingByStore]);
@@ -312,6 +316,20 @@ export default function LivePage() {
     if (event.event === 'transcript.final' && isJunkTranscript(event.originalText || '')) return;
     if (event.event === 'transcript.partial' && !event.originalText) return;
 
+    const sequenceKey = `${storeId}:${event.conversationId || ''}`;
+    if (event.event === 'transcript.partial') {
+      const finishedUpTo = finalSeqRef.current.get(sequenceKey) ?? 0;
+      const newestPreview = previewSeqRef.current.get(sequenceKey) ?? 0;
+      const captureSequence = event.captureSequence ?? 0;
+      const previewSequence = event.previewSequence ?? 0;
+      // This phrase already has its final line, or a newer live-words answer was shown: ignore.
+      if (captureSequence > 0 && captureSequence <= finishedUpTo) return;
+      if (previewSequence > 0 && previewSequence < newestPreview) return;
+      if (previewSequence > 0) previewSeqRef.current.set(sequenceKey, previewSequence);
+    } else if (event.event === 'transcript.final') {
+      finalSeqRef.current.set(sequenceKey, Math.max(finalSeqRef.current.get(sequenceKey) ?? 0, event.captureSequence ?? 0));
+    }
+
     let line: Line | null = null;
     if (event.event === 'transcript.final') {
       const segmentId = event.segmentId || `${event.timestamp}-${Math.random()}`;
@@ -436,23 +454,32 @@ export default function LivePage() {
     const controller = new AbortController();
     setError('');
     void (async () => {
-      const awake = await wakeApi(controller.signal);
-      if (controller.signal.aborted) return;
-      if (!awake) {
-        setError('Waking the Store Listen API (free tier cold start). This can take up to a minute…');
-      }
-      try {
-        const payload = await apiGetWithRetry<{ stores: { items: Store[] } }>(
-          '/api/v1/stores',
-          { signal: controller.signal },
-          5,
-        );
+      // Keep trying until the API answers: a redeploy or cold start can take a few minutes.
+      for (let round = 0; !controller.signal.aborted; round += 1) {
+        const awake = await wakeApi(controller.signal);
         if (controller.signal.aborted) return;
-        setStores(payload.stores.items);
-        setError('');
-      } catch (cause: unknown) {
-        if (!controller.signal.aborted) {
-          setError(cause instanceof Error ? cause.message : 'Unable to load stores');
+        if (!awake) {
+          setError('Waking the Store Listen API (cloud restart). Reconnecting automatically…');
+        }
+        try {
+          const payload = await apiGetWithRetry<{ stores: { items: Store[] } }>(
+            '/api/v1/stores',
+            { signal: controller.signal },
+            3,
+          );
+          if (controller.signal.aborted) return;
+          setStores(payload.stores.items);
+          setError('');
+          return;
+        } catch (cause: unknown) {
+          if (controller.signal.aborted) return;
+          const code = (cause as { status?: number })?.status;
+          if (code === 401 || code === 403) {
+            setError(cause instanceof Error ? cause.message : 'Unable to load stores');
+            return;
+          }
+          setError('Reconnecting to the Store Listen API…');
+          await new Promise((resolve) => window.setTimeout(resolve, Math.min(2000 + round * 1000, 6000)));
         }
       }
     })();

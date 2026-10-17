@@ -1,4 +1,5 @@
 from app.providers.speech_quality import (
+    filter_whisper_segments,
     is_hallucinated_transcript,
     is_recent_duplicate,
     is_usable_english_translation,
@@ -72,3 +73,30 @@ def test_usable_english_translation_rejects_spanish_echo():
         "Señor, tenemos este producto",
     )
     assert polish_spanish_translation("Gracias", "Gracias") == "Thank you"
+
+
+def test_whisper_segments_marked_as_silence_are_dropped():
+    segments = [
+        {"text": " Hello, do you have chargers?", "no_speech_prob": 0.02, "avg_logprob": -0.2, "compression_ratio": 1.2},
+        {"text": " Thanks for watching", "no_speech_prob": 0.93, "avg_logprob": -0.4, "compression_ratio": 1.1},
+        {"text": " you you you you", "no_speech_prob": 0.7, "avg_logprob": -1.4, "compression_ratio": 1.0},
+        {"text": " la la la la la la la la", "no_speech_prob": 0.1, "avg_logprob": -0.5, "compression_ratio": 3.1},
+    ]
+    assert filter_whisper_segments(segments) == "Hello, do you have chargers?"
+
+
+def test_whisper_segments_all_noise_returns_empty_and_missing_data_returns_none():
+    noise = [{"text": " Bye.", "no_speech_prob": 0.97, "avg_logprob": -0.9, "compression_ratio": 0.8}]
+    assert filter_whisper_segments(noise) == ""
+    assert filter_whisper_segments(None) is None
+    assert filter_whisper_segments([]) is None
+
+
+def test_whisper_segments_accept_attribute_objects():
+    class Segment:
+        text = " Necesito un cargador"
+        no_speech_prob = 0.05
+        avg_logprob = -0.3
+        compression_ratio = 1.4
+
+    assert filter_whisper_segments([Segment()]) == "Necesito un cargador"

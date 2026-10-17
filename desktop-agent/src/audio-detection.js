@@ -4,18 +4,20 @@
     minRms: 0.006,
     rmsThreshold: 0.009,
     peakThreshold: 0.028,
-    snr: 1.4,
+    snr: 2.2,
     minSpeechRatio: 0.2,
     minZcr: 0.008,
     maxZcr: 0.55,
     startFrames: 2,
     endFrames: 6,
-    silenceHangoverMs: 420,
-    // One phrase per upload: accurate text, then it shows on desktop and dashboard together.
-    maxSegmentMs: 5000,
+    silenceHangoverMs: 380,
+    // One whole phrase per final upload; words stream live while the person is still talking.
+    maxSegmentMs: 7000,
     minClipMs: 500,
-    previewIntervalMs: 900,
-    livePreviewEnabled: false,
+    // Real speech must last this long inside a clip, otherwise it was a door slam or a cough.
+    minVoicedMs: 280,
+    previewIntervalMs: 500,
+    livePreviewEnabled: true,
   });
 
   function calculateAudioEnergy(samples) {
@@ -98,8 +100,8 @@
         const ratio = speechBandRatio(frequencyDb, sampleRate);
         if (!speaking) noiseRms = (noiseRms * 0.94) + (energy.rms * 0.06);
         const rmsFloor = Math.max(config.minRms, noiseRms * config.snr);
-        const voicedNow = isVoicedFrame(samples, frequencyDb, sampleRate, rmsFloor)
-          || shouldVoiceTrigger(samples, rmsFloor, config.peakThreshold);
+        // Loud noise alone is not speech: the frame must also have a speech-shaped spectrum.
+        const voicedNow = isVoicedFrame(samples, frequencyDb, sampleRate, rmsFloor);
         if (voicedNow) {
           voiced += 1;
           silent = 0;

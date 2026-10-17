@@ -10,6 +10,7 @@ from pathlib import Path
 from app.config import settings
 from app.providers.speech_quality import (
     SUPPORTED_LANGUAGES,
+    filter_whisper_segments,
     is_hallucinated_transcript,
     is_usable_english_translation,
     looks_like_spanish,
@@ -283,7 +284,8 @@ class CloudSpeechProvider(SpeechProvider):
             client_kwargs["base_url"] = config["base_url"]
         return OpenAI(**client_kwargs)
 
-    def _transcribe_once(self, client, model: str, path: Path, *, language: str | None) -> tuple[str, str | None]:
+    def _transcribe_once(self, client, model: str, path: Path, *, language: str | None) -> tuple[str, str | None, bool]:
+        """Return (text, detected language, rejected_as_noise)."""
         filename = path.name or f"audio{path.suffix or '.webm'}"
         with path.open("rb") as audio_file:
             kwargs: dict = {
@@ -308,8 +310,17 @@ class CloudSpeechProvider(SpeechProvider):
                     bare["language"] = language
                 result = client.audio.transcriptions.create(**bare)
         text = sanitize_transcript(getattr(result, "text", None) or "")
+        segments = getattr(result, "segments", None)
+        if segments is None and isinstance(result, dict):
+            segments = result.get("segments")
+        spoken = filter_whisper_segments(segments)
+        rejected_as_noise = False
+        if spoken is not None:
+            # Whisper itself marked these segments as silence/noise: never show them as speech.
+            rejected_as_noise = bool(text) and not spoken.strip()
+            text = sanitize_transcript(spoken)
         detected = normalize_supported_language(getattr(result, "language", None) or language)
-        return text, detected
+        return text, detected, rejected_as_noise
 
     def _chat_translate_spanish(self, client, config: dict[str, str], spanish_text: str) -> str:
         from app.providers.groq_chat import groq_chat_completion
@@ -365,9 +376,9 @@ class CloudSpeechProvider(SpeechProvider):
         # Auto-detect first unless the operator forced EN/ES.
         # Never retry on hallucinated filler (Tchau/Obrigado/Thank you) — a second pass
         # on the same noise usually invents a different fake word.
-        original, detected = self._transcribe_once(client, model, path, language=hint)
-        if not original and hint is None and not fast:
-            alt_text, alt_lang = self._transcribe_once(client, model, path, language="es")
+        original, detected, rejected_as_noise = self._transcribe_once(client, model, path, language=hint)
+        if not original and hint is None and not fast and not rejected_as_noise:
+            alt_text, alt_lang, _alt_noise = self._transcribe_once(client, model, path, language="es")
             if alt_text and not is_hallucinated_transcript(alt_text):
                 original, detected = alt_text, alt_lang or "es"
 

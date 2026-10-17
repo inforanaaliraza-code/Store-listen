@@ -301,6 +301,45 @@ def is_hallucinated_transcript(text: str) -> bool:
     return False
 
 
+def _segment_value(segment, name: str):
+    value = segment.get(name) if isinstance(segment, dict) else getattr(segment, name, None)
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def filter_whisper_segments(segments) -> str | None:
+    """Keep only text Whisper itself believes is speech.
+
+    Whisper invents sentences on silence and room noise. verbose_json reports how likely each
+    segment is to be silence (no_speech_prob), how confident the decoder was (avg_logprob) and
+    whether it looped (compression_ratio). Returns None when the provider gave no segment data,
+    "" when every segment was rejected, otherwise the joined kept text.
+    """
+    if not segments:
+        return None
+    kept: list[str] = []
+    for segment in segments:
+        text = segment.get("text") if isinstance(segment, dict) else getattr(segment, "text", "")
+        text = str(text or "").strip()
+        if not text:
+            continue
+        no_speech = _segment_value(segment, "no_speech_prob")
+        logprob = _segment_value(segment, "avg_logprob")
+        compression = _segment_value(segment, "compression_ratio")
+        if no_speech is not None and no_speech > 0.85:
+            continue
+        if no_speech is not None and logprob is not None and no_speech > 0.6 and logprob < -1.0:
+            continue
+        if logprob is not None and logprob < -1.6:
+            continue
+        if compression is not None and compression > 2.4:
+            continue
+        kept.append(text)
+    return " ".join(kept)
+
+
 def sanitize_transcript(text: str) -> str:
     cleaned = " ".join((text or "").split()).strip(" \t\n\r.-")
     return cleaned

@@ -5,14 +5,36 @@ const deviceHealth = window.StoreListenDeviceHealth;
 const { isDeviceSessionExpired } = window.StoreListenDeviceConfig;
 const { stopCaptureAndDrain } = window.StoreListenRecordingLifecycle;
 const { formatUserError } = window.StoreListenErrorMessages;
-const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 1400;
-const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 350;
-const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 600, 400);
+const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 7000;
+const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 500;
+const MIN_VOICED_MS = voiceDetection.config?.minVoicedMs ?? 280;
+const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 500, 350);
 const LIVE_PREVIEW_ENABLED = voiceDetection.config?.livePreviewEnabled !== false;
+// A preview of less than ~0.4s of audio is usually a breath or a click, never a word.
+const MIN_PREVIEW_BYTES = 4500;
 const RECORDER_TIMESLICE_MS = 100;
 const MAX_PARALLEL_UPLOADS = 3;
 const STOP_UPLOAD_WAIT_MS = 0;
 const PREFERRED_MIC_KEY = 'storelisten.preferredMic';
+const MANUAL_STOP_KEY = 'storelisten.manualStop';
+
+// A manual Stop stays stopped across window re-open, PC resume, retries and app restarts.
+function isManuallyStopped() {
+  try {
+    return window.localStorage.getItem(MANUAL_STOP_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setManuallyStopped(stopped) {
+  try {
+    if (stopped) window.localStorage.setItem(MANUAL_STOP_KEY, '1');
+    else window.localStorage.removeItem(MANUAL_STOP_KEY);
+  } catch {
+    // Storage is optional; the in-memory capture state still stops capture.
+  }
+}
 const setupScreen = $('#setupScreen');
 const appScreen = $('#appScreen');
 const state = {
@@ -252,9 +274,16 @@ function setDeviceStatus(online) {
   badge.querySelector('span').textContent = online ? 'Connected' : 'Reconnecting';
 }
 
+let apiFailureStreak = 0;
+let apiRecheckTimer = null;
+
 function setApiStatus(online) {
+  // One slow request must not flip the badge; show Unavailable only after two failures in a row.
+  apiFailureStreak = online ? 0 : apiFailureStreak + 1;
+  if (!online && apiFailureStreak < 2) return;
   const status = $('#apiStatus');
-  status.innerHTML = `<i class="status-dot${online ? '' : ' bad'}"></i>${online ? 'Available' : 'Unavailable'}`;
+  const html = `<i class="status-dot${online ? '' : ' bad'}"></i>${online ? 'Available' : 'Unavailable'}`;
+  if (status.innerHTML !== html) status.innerHTML = html;
   if (!online && !state.capture) $('#deliveryStat').innerHTML = '<i class="stat-dot pending"></i>Offline';
   else if (online && !state.capture) $('#deliveryStat').innerHTML = '<i class="stat-dot"></i>Ready';
 }
@@ -265,6 +294,9 @@ async function checkApi() {
     setApiStatus(true);
   } catch {
     setApiStatus(false);
+    // Render may be waking up or redeploying: look again in 4s instead of waiting a full cycle.
+    window.clearTimeout(apiRecheckTimer);
+    apiRecheckTimer = window.setTimeout(() => void checkApi(), 4_000);
   }
 }
 
@@ -374,7 +406,7 @@ function scheduleHealthReconnect() {
   if (!state.config) return;
   window.clearTimeout(state.reconnectTimer);
   const delay = state.reconnectDelay;
-  state.reconnectDelay = Math.min(delay * 2, 30_000);
+  state.reconnectDelay = Math.min(delay * 1.6, 6_000);
   state.reconnectTimer = window.setTimeout(connectHealth, Math.round(delay * (0.75 + Math.random() * 0.5)));
 }
 
@@ -468,17 +500,25 @@ async function beginApprovedCapture() {
   if (status === 'approved') void startCapture();
 }
 
+let smoothedMicLevel = 0;
+
 function updateMicWaveform(samples, speaking) {
   const bars = $('#micWaveform')?.querySelectorAll('i');
   if (!bars?.length) return;
   let sum = 0;
   for (let index = 0; index < samples.length; index += 8) sum += samples[index] * samples[index];
   const rms = Math.sqrt(sum / Math.max(1, Math.floor(samples.length / 8)));
-  const level = Math.min(1, rms * 12);
+  const raw = Math.min(1, rms * 12);
+  // Fast rise, slow fall, so the bars glide instead of flickering every frame.
+  smoothedMicLevel = Math.max(raw, smoothedMicLevel * 0.9);
+  const level = speaking ? Math.max(smoothedMicLevel, 0.15) : smoothedMicLevel;
   bars.forEach((bar, index) => {
     const weight = 0.35 + ((index % 4) * 0.18);
-    const height = 4 + Math.round((speaking ? Math.max(level, 0.22) : level) * weight * 18);
-    bar.style.height = `${height}px`;
+    const height = 4 + Math.round(level * weight * 18);
+    if (bar.dataset.h !== String(height)) {
+      bar.dataset.h = String(height);
+      bar.style.height = `${height}px`;
+    }
   });
 }
 
@@ -919,9 +959,9 @@ async function uploadSegment(capture, blob, sequence, offset, duration) {
     roundTripMs: Math.round(performance.now() - uploadStartedAt),
     speechProvider: response.speech_provider,
   });
-  else {
-    capture.latestPreviewText = '';
-    // Quiet / unsupported / failed clips are dropped silently — keep listening.
+  else if (!capture.recorder && !capture.speaking) {
+    // The server heard no real speech in this clip: remove the provisional words instead of leaving them.
+    clearLivePartial();
   }
   if (response.segment) showError($('#captureError'), '');
   setApiStatus(true);
@@ -933,7 +973,16 @@ function enqueueUpload(capture, blob, sequence, offset, duration) {
     capture.activeUploads = (capture.activeUploads || 0) + 1;
     refreshUploadDrain(capture);
     try {
-      await uploadSegment(capture, blob, sequence, offset, duration);
+      // A short API hiccup (cold start, redeploy) must not swallow what the customer said.
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await uploadSegment(capture, blob, sequence, offset, duration);
+          break;
+        } catch (error) {
+          if (attempt >= 3 || isDeviceSessionExpired(error)) throw error;
+          await new Promise((resolve) => window.setTimeout(resolve, 1200 * (attempt + 1)));
+        }
+      }
     } finally {
       capture.activeUploads = Math.max(0, (capture.activeUploads || 1) - 1);
     }
@@ -972,24 +1021,25 @@ function beginRecorder(capture) {
   capture.previewThrottle = previewThrottle;
   capture.previewSequence = capture.previewSequence || 0;
   capture.spokeInSegment = Boolean(capture.speaking);
-  capture.segmentPeakRms = capture.speaking ? Math.max(capture.segmentPeakRms || 0, 0.01) : 0;
+  capture.segmentPeakRms = 0;
+  capture.segmentVoicedMs = 0;
+  capture.discardSegment = false;
   capture.recorder = recorder;
   capture.segmentStartedAt = startedAt;
+  // Preview state belongs to this one phrase, so a late answer can never paint into the next one.
+  let previewBusy = false;
+  let previewApplied = 0;
   recorder.ondataavailable = (event) => {
     if (!event.data.size) return;
     chunks.push(event.data);
-    if (!LIVE_PREVIEW_ENABLED || !capture.requested || !capture.previewThrottle || capture.previewInFlight) return;
-    // One live preview at a time so finals are not stuck behind a preview pile-up.
-    const active = capture.speaking
-      || capture.spokeInSegment
-      || (capture.segmentPeakRms || 0) >= (voiceDetection.config?.minRms || 0.0025);
-    if (!active) return;
-    const now = Date.now();
-    if (!capture.previewThrottle.shouldSend(now)) return;
+    if (!LIVE_PREVIEW_ENABLED || !capture.requested || !capture.previewThrottle || previewBusy) return;
+    // Words stream only while real speech is happening, never for room noise.
+    if (capture.recorder !== recorder || !capture.speaking) return;
     const previewBlob = new Blob(chunks, { type: mimeType });
-    if (previewBlob.size < 1200) return;
+    if (previewBlob.size < MIN_PREVIEW_BYTES) return;
+    if (!capture.previewThrottle.shouldSend(Date.now())) return;
     const previewSequence = ++capture.previewSequence;
-    capture.previewInFlight = true;
+    previewBusy = true;
     void (async () => {
       try {
         const response = await window.storeListen.previewAudio({
@@ -1006,16 +1056,16 @@ function beginRecorder(capture) {
             preview_sequence: previewSequence,
           },
         });
-        // Drop stale preview responses so the newest words win.
-        if (previewSequence < (capture.previewAppliedSequence || 0)) return;
-        if (response?.segment?.originalText && capture.requested) {
-          capture.previewAppliedSequence = previewSequence;
+        // The phrase already ended (final is on its way) or a newer answer was shown: drop this one.
+        if (capture.recorder !== recorder || !capture.requested || previewSequence < previewApplied) return;
+        if (response?.segment?.originalText) {
+          previewApplied = previewSequence;
           showLivePartial(response.segment);
         }
       } catch {
         // Final transcription remains authoritative if a provisional preview fails.
       } finally {
-        capture.previewInFlight = false;
+        previewBusy = false;
       }
     })();
   };
@@ -1023,8 +1073,8 @@ function beginRecorder(capture) {
     // Keep session LIVE; a single recorder fault must not end the day.
     if (capture.requested) {
       capture.recorder = null;
-      setMicrophoneStatus('Microphone is active', 'ok');
-      beginRecorder(capture);
+      setMicrophoneStatus(capture.speaking ? 'Voice detected' : 'Microphone is active', 'ok');
+      if (capture.speaking) beginRecorder(capture);
     }
   };
   recorder.onstop = () => {
@@ -1035,18 +1085,19 @@ function beginRecorder(capture) {
     const duration = Math.max(durationMs / 1000, 0.1);
     const offset = Math.max((startedAt - capture.startedAt) / 1000, 0);
     capture.offset = offset + duration;
-    const energyFloor = (voiceDetection.config?.minRms || 0.0025) * 0.75;
-    const hadVoice = capture.spokeInSegment
-      || capture.speaking
-      || (capture.segmentPeakRms || 0) >= energyFloor;
-    // Skip only true silence so soft speech is never dropped.
+    // Only a clip with real, sustained speech is sent. Clicks, coughs and fan noise never reach Whisper.
+    const discarded = capture.discardSegment;
+    const hadVoice = !discarded && capture.segmentVoicedMs >= MIN_VOICED_MS;
+    capture.discardSegment = false;
     if (hadVoice && blob.size && durationMs >= MIN_CLIP_MS) {
       const sequence = ++capture.sequence;
       enqueueUpload(capture, blob, sequence, offset, duration);
+    } else if (!capture.speaking) {
+      // Nothing worth transcribing: remove any half-painted live words.
+      clearLivePartial();
     }
-    // Next phrase starts only while the person is still talking.
+    // A phrase that hit the time limit continues straight into the next clip.
     if (capture.requested && capture.speaking) {
-      setMicrophoneStatus('Voice detected', 'ok');
       beginRecorder(capture);
     }
   };
@@ -1060,33 +1111,44 @@ function monitorVoice(capture) {
   const samples = new Float32Array(capture.analyser.fftSize);
   const spectrum = new Float32Array(capture.analyser.frequencyBinCount);
   const gate = voiceDetection.createVoiceGate ? voiceDetection.createVoiceGate() : null;
+  let lastTickAt = performance.now();
   const tick = () => {
     if (!capture.requested) return;
+    const now = performance.now();
+    const elapsed = Math.min(now - lastTickAt, 100);
+    lastTickAt = now;
     capture.analyser.getFloatTimeDomainData(samples);
     capture.analyser.getFloatFrequencyData(spectrum);
     const energy = voiceDetection.calculateAudioEnergy?.(samples) || { rms: 0, peak: 0 };
     capture.segmentPeakRms = Math.max(capture.segmentPeakRms || 0, energy.rms || 0);
     updateMicWaveform(samples, capture.speaking);
     const result = gate
-      ? gate.observe(samples, spectrum, capture.audioContext.sampleRate, performance.now())
+      ? gate.observe(samples, spectrum, capture.audioContext.sampleRate, now)
       : { state: 'idle' };
-    if (result.state === 'start' || result.state === 'speech' || result.state === 'rising') {
-      capture.spokeInSegment = true;
-      if (!capture.speaking || result.state === 'start') {
+    if (result.state === 'rising' && !capture.recorder) {
+      // Record from the first voiced frame so the start of the first word is not cut off.
+      beginRecorder(capture);
+    } else if (result.state === 'start') {
+      if (!capture.speaking) {
         capture.speaking = true;
-        $('#captureTitle').textContent = 'Voice detected';
-        $('#captureMessage').textContent = 'Phrase is recording. The line appears as soon as you pause.';
         setMicrophoneStatus('Voice detected', 'ok');
-        setCaptureUi(true);
         sendHealth({ speaking: true });
       }
       if (!capture.recorder) beginRecorder(capture);
+    } else if (result.state === 'idle' && capture.recorder?.state === 'recording' && !capture.speaking) {
+      // The first voiced frame was a click, not speech: throw that clip away.
+      // A recorder already told to stop is "inactive", so a finished phrase is never discarded here.
+      capture.discardSegment = true;
+      capture.recorder.stop();
     } else if (result.state === 'end') {
       capture.speaking = false;
       setMicrophoneStatus('Microphone is active', 'ok');
-      setCaptureUi(true);
       sendHealth({ speaking: false });
       if (capture.recorder?.state === 'recording') capture.recorder.stop();
+    }
+    if (capture.speaking && (result.state === 'start' || result.state === 'speech')) {
+      capture.spokeInSegment = true;
+      capture.segmentVoicedMs = (capture.segmentVoicedMs || 0) + elapsed;
     }
     capture.voiceFrame = window.requestAnimationFrame(tick);
   };
@@ -1100,6 +1162,11 @@ async function stopCapture({ reason = 'manual' } = {}) {
   if (capture.stopPromise) return capture.stopPromise;
   // Session save only for manual Stop or PC sleep/shutdown — never for silence/upload errors.
   if (!['manual', 'sleep', 'shutdown', 'quit'].includes(reason)) return;
+  // Only the person pressing Stop makes the stop permanent; sleep/quit still auto-resume.
+  if (reason === 'manual') {
+    setManuallyStopped(true);
+    window.clearTimeout(state.captureRetryTimer);
+  }
   capture.requested = false;
   capture.speaking = false;
   clearLivePartial();
@@ -1133,7 +1200,15 @@ async function stopCapture({ reason = 'manual' } = {}) {
   return capture.stopPromise;
 }
 
-async function startCapture() {
+async function startCapture({ fromUser = false } = {}) {
+  if (fromUser) setManuallyStopped(false);
+  // Every automatic path (window re-open, PC resume, retry timer, approval poll) lands here.
+  else if (isManuallyStopped()) {
+    setCaptureUi(false, false, true);
+    $('#captureTitle').textContent = 'Stopped';
+    $('#captureMessage').textContent = 'You stopped capture. It stays off until you press Start.';
+    return;
+  }
   if (state.capture) return;
   if (state.captureStartPromise) return state.captureStartPromise;
   const approval = await refreshApprovalStatus();
@@ -1251,7 +1326,7 @@ async function startCaptureSession() {
     const blockedApproval = /awaiting admin approval|approval/i.test(String(error?.message || ''));
     if (!blockedApproval) {
       state.captureRetryTimer = window.setTimeout(() => {
-        if (state.config && !state.capture && state.approvalStatus === 'approved') void startCapture();
+        if (state.config && !state.capture && state.approvalStatus === 'approved' && !isManuallyStopped()) void startCapture();
       }, 4000);
     } else {
       state.approvalStatus = 'pending';
@@ -1355,9 +1430,8 @@ $('#deviceForm').addEventListener('submit', async (event) => {
 });
 
 $('#captureButton').addEventListener('click', () => {
-  if (state.capture?.requested) void stopCapture({ reason: 'manual' });
-  else if (state.capture) void stopCapture({ reason: 'manual' });
-  else void startCapture();
+  if (state.capture) void stopCapture({ reason: 'manual' });
+  else void startCapture({ fromUser: true });
 });
 
 window.storeListen.onCaptureStopRequested(async () => {
@@ -1377,7 +1451,7 @@ window.storeListen.onSystemSuspend(async () => {
 });
 
 window.storeListen.onSystemResume(() => {
-  if (state.config && !state.capture && state.approvalStatus === 'approved') {
+  if (state.config && !state.capture && state.approvalStatus === 'approved' && !isManuallyStopped()) {
     showError($('#captureError'), '');
     void startCapture();
   }

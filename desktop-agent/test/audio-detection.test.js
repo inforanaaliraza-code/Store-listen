@@ -29,9 +29,11 @@ test('voice gate opens quickly and streams short live clips', () => {
   assert.ok(config.startFrames <= 2, 'open the gate within two voiced frames');
   assert.ok(config.endFrames <= 6, 'end the phrase after a short pause');
   assert.ok(config.silenceHangoverMs <= 450, 'do not hold a finished phrase');
-  assert.equal(config.livePreviewEnabled, false, 'one final transcript per phrase, no competing preview');
-  assert.ok(config.maxSegmentMs <= 5000 && config.maxSegmentMs >= 3000, 'a phrase is long enough to transcribe accurately');
+  assert.equal(config.livePreviewEnabled, true, 'words stream live while the person is still speaking');
+  assert.ok(config.previewIntervalMs <= 600, 'live words refresh about twice a second');
+  assert.ok(config.maxSegmentMs <= 8000 && config.maxSegmentMs >= 3000, 'a phrase is long enough to transcribe accurately');
   assert.ok(config.minClipMs >= 400 && config.minClipMs <= 700, 'skip noise blips, keep real words');
+  assert.ok(config.minVoicedMs >= 200 && config.minVoicedMs <= 400, 'a clip needs real voiced time before it is uploaded');
   assert.ok(config.minRms <= 0.008, 'soft store speech must still open the gate');
 
   const gate = createVoiceGate();
@@ -67,6 +69,34 @@ test('quiet but real store-counter speech still opens the voice gate', () => {
     if (gate.observe(quiet, mixed, 48000).state === 'start') started = true;
   }
   assert.equal(started, true);
+});
+
+test('loud room noise without a speech-shaped spectrum never opens the gate', () => {
+  const gate = createVoiceGate();
+  const noise = tone(512, 0.12, 400);
+  // Real HVAC rumble: all energy under 220 Hz (FFT bins 1-2 at 48 kHz), silence everywhere else.
+  const rumble = new Float32Array(256).fill(-100);
+  rumble[1] = -8;
+  rumble[2] = -8;
+  let started = false;
+  for (let frame = 0; frame < 60; frame += 1) {
+    if (gate.observe(noise, rumble, 48000, frame * 16).state === 'start') started = true;
+  }
+  assert.equal(started, false);
+});
+
+test('a two frame click is not a spoken phrase', () => {
+  const gate = createVoiceGate();
+  const speech = tone(512, 0.1);
+  const speechSpectrum = spectrum(-18, -70);
+  const hush = new Float32Array(512);
+  const hushSpectrum = spectrum(-90, -55);
+  const states = [];
+  states.push(gate.observe(speech, speechSpectrum, 48000, 0).state);
+  states.push(gate.observe(hush, hushSpectrum, 48000, 16).state);
+  for (let frame = 2; frame < 20; frame += 1) states.push(gate.observe(hush, hushSpectrum, 48000, frame * 16).state);
+  assert.equal(states.includes('start'), false);
+  assert.equal(states.at(-1), 'idle');
 });
 
 test('moderate human speech should trigger the energy gate', () => {
