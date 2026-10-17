@@ -5,13 +5,14 @@ const deviceHealth = window.StoreListenDeviceHealth;
 const { isDeviceSessionExpired } = window.StoreListenDeviceConfig;
 const { stopCaptureAndDrain } = window.StoreListenRecordingLifecycle;
 const { formatUserError } = window.StoreListenErrorMessages;
-const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 360;
-const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 100;
-const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 150, 100);
+const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 900;
+const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 280;
+const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 200, 120);
 const LIVE_PREVIEW_ENABLED = voiceDetection.config?.livePreviewEnabled !== false;
-const RECORDER_TIMESLICE_MS = 80;
-const MAX_PARALLEL_UPLOADS = 12;
+const RECORDER_TIMESLICE_MS = 100;
+const MAX_PARALLEL_UPLOADS = 3;
 const STOP_UPLOAD_WAIT_MS = 0;
+const PREFERRED_MIC_KEY = 'storelisten.preferredMic';
 const setupScreen = $('#setupScreen');
 const appScreen = $('#appScreen');
 const state = {
@@ -232,7 +233,12 @@ function showWorkspace(config) {
   $('#archiveTranscriptCount').textContent = String(state.sessions.length);
   setActiveView('capture');
   renderTranscriptArchive();
-  void refreshMicrophones();
+  void ensureDefaultMicrophoneSelected();
+  const micSelect = $('#microphoneSelect');
+  if (micSelect && !micSelect.dataset.boundPreferred) {
+    micSelect.dataset.boundPreferred = '1';
+    micSelect.addEventListener('change', () => rememberPreferredMic(micSelect.value));
+  }
   void checkApi();
   connectHealth();
   state.apiTimer = window.setInterval(checkApi, 20_000);
@@ -267,19 +273,78 @@ function setMicrophoneStatus(label, type = 'neutral') {
   status.innerHTML = `<i class="status-dot${type === 'ok' ? '' : type === 'bad' ? ' bad' : ' neutral'}"></i>${label}`;
 }
 
-async function refreshMicrophones() {
+function preferredMicId() {
+  try {
+    return window.localStorage.getItem(PREFERRED_MIC_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function rememberPreferredMic(deviceId) {
+  try {
+    if (deviceId) window.localStorage.setItem(PREFERRED_MIC_KEY, deviceId);
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function audioCaptureConstraints(deviceId = '') {
+  const base = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+    channelCount: 1,
+  };
+  if (deviceId) return { ...base, deviceId: { ideal: deviceId } };
+  return base;
+}
+
+async function refreshMicrophones(forceDeviceId = '') {
   const select = $('#microphoneSelect');
-  const selected = select.value;
+  const previous = forceDeviceId || select.value || preferredMicId();
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const microphones = devices.filter((device) => device.kind === 'audioinput');
-    select.replaceChildren(new Option('Default microphone', ''));
+    select.replaceChildren();
+    // Put the OS default first so Start uses the same mic Windows routes by default.
+    select.add(new Option('Default system microphone', ''));
     microphones.forEach((device, index) => {
-      select.add(new Option(device.label || `Microphone ${index + 1}`, device.deviceId));
+      const label = device.label || `Microphone ${index + 1}`;
+      select.add(new Option(label, device.deviceId));
     });
-    if (microphones.some((device) => device.deviceId === selected)) select.value = selected;
+    if (previous && microphones.some((device) => device.deviceId === previous)) {
+      select.value = previous;
+    } else {
+      select.value = '';
+    }
   } catch {
-    select.replaceChildren(new Option('Default microphone', ''));
+    select.replaceChildren(new Option('Default system microphone', ''));
+  }
+}
+
+async function ensureDefaultMicrophoneSelected() {
+  const select = $('#microphoneSelect');
+  try {
+    // Unlock device labels + bind to the real default Windows input before Start.
+    const probe = await navigator.mediaDevices.getUserMedia({
+      audio: audioCaptureConstraints(preferredMicId()),
+      video: false,
+    });
+    const activeId = probe.getAudioTracks()[0]?.getSettings?.()?.deviceId || '';
+    probe.getTracks().forEach((track) => track.stop());
+    await refreshMicrophones(activeId || preferredMicId());
+    if (activeId) {
+      select.value = activeId;
+      rememberPreferredMic(activeId);
+    } else {
+      select.value = preferredMicId() || '';
+    }
+    const chosen = select.selectedOptions?.[0]?.textContent || 'Default system microphone';
+    setMicrophoneStatus(`${chosen} ready`, 'ok');
+  } catch {
+    await refreshMicrophones(preferredMicId());
+    select.value = preferredMicId() || '';
   }
 }
 
@@ -907,14 +972,18 @@ function beginRecorder(capture) {
   capture.previewThrottle = previewThrottle;
   capture.previewSequence = capture.previewSequence || 0;
   capture.spokeInSegment = Boolean(capture.speaking);
+  capture.segmentPeakRms = capture.speaking ? Math.max(capture.segmentPeakRms || 0, 0.01) : 0;
   capture.recorder = recorder;
   capture.segmentStartedAt = startedAt;
   recorder.ondataavailable = (event) => {
     if (!event.data.size) return;
     chunks.push(event.data);
     if (!LIVE_PREVIEW_ENABLED || !capture.requested || !capture.previewThrottle) return;
-    // Only preview while voice is present — silence previews waste STT and hurt accuracy.
-    if (!capture.speaking && !capture.spokeInSegment) return;
+    // Preview while there is energy — do not wait for a perfect VAD edge.
+    const active = capture.speaking
+      || capture.spokeInSegment
+      || (capture.segmentPeakRms || 0) >= (voiceDetection.config?.minRms || 0.0025);
+    if (!active) return;
     const now = Date.now();
     if (!capture.previewThrottle.shouldSend(now)) return;
     const previewBlob = new Blob(chunks, { type: mimeType });
@@ -963,8 +1032,11 @@ function beginRecorder(capture) {
     const duration = Math.max(durationMs / 1000, 0.1);
     const offset = Math.max((startedAt - capture.startedAt) / 1000, 0);
     capture.offset = offset + duration;
-    const hadVoice = capture.spokeInSegment || capture.speaking;
-    // Skip silence-only clips so STT stays fast and accurate.
+    const energyFloor = (voiceDetection.config?.minRms || 0.0025) * 0.75;
+    const hadVoice = capture.spokeInSegment
+      || capture.speaking
+      || (capture.segmentPeakRms || 0) >= energyFloor;
+    // Skip only true silence so soft speech is never dropped.
     if (hadVoice && blob.size && durationMs >= MIN_CLIP_MS) {
       const sequence = ++capture.sequence;
       enqueueUpload(capture, blob, sequence, offset, duration);
@@ -992,7 +1064,9 @@ function monitorVoice(capture) {
     capture.analyser.getFloatTimeDomainData(samples);
     capture.analyser.getFloatFrequencyData(spectrum);
     const energy = voiceDetection.calculateAudioEnergy?.(samples) || { rms: 0, peak: 0 };
-    const energyStart = voiceDetection.shouldVoiceTrigger?.(samples);
+    capture.segmentPeakRms = Math.max(capture.segmentPeakRms || 0, energy.rms || 0);
+    const energyStart = voiceDetection.shouldVoiceTrigger?.(samples)
+      || energy.rms >= (voiceDetection.config?.minRms || 0.0025);
     updateMicWaveform(samples, capture.speaking || energyStart);
     if (!capture.recorder) beginRecorder(capture);
     const result = gate
@@ -1018,8 +1092,6 @@ function monitorVoice(capture) {
       setMicrophoneStatus('Microphone is active', 'ok');
       setCaptureUi(true);
       sendHealth({ speaking: false });
-    } else if (energy.rms < (voiceDetection.config?.minRms || 0.003) && capture.speaking) {
-      // Soft fall-through when analyser lags behind the gate.
     }
     capture.voiceFrame = window.requestAnimationFrame(tick);
   };
@@ -1092,15 +1164,19 @@ async function startCaptureSession() {
   let stream;
   let audioContext;
   try {
-    const selectedDevice = $('#microphoneSelect').value;
-    const audioConstraints = selectedDevice ? { deviceId: { ideal: selectedDevice } } : true;
-    stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: false });
+    const selectedDevice = $('#microphoneSelect').value || preferredMicId();
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: audioCaptureConstraints(selectedDevice),
+      video: false,
+    });
+    const activeMicId = stream.getAudioTracks()[0]?.getSettings?.()?.deviceId || selectedDevice || '';
+    if (activeMicId) rememberPreferredMic(activeMicId);
     audioContext = new AudioContext();
     await audioContext.resume();
     const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 1024;
+    analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.05;
-    analyser.minDecibels = -90;
+    analyser.minDecibels = -95;
     analyser.maxDecibels = -10;
     const source = audioContext.createMediaStreamSource(stream);
     const silent = audioContext.createGain();
@@ -1108,7 +1184,8 @@ async function startCaptureSession() {
     source.connect(analyser);
     analyser.connect(silent);
     silent.connect(audioContext.destination);
-    await refreshMicrophones();
+    await refreshMicrophones(activeMicId);
+    if (activeMicId) $('#microphoneSelect').value = activeMicId;
     const session = await request('/api/v1/audio/sessions', {
       method: 'POST',
       body: { store_id: state.config.storeId },
@@ -1155,6 +1232,7 @@ async function startCaptureSession() {
       previewSequence: 0,
       previewAppliedSequence: 0,
       spokeInSegment: false,
+      segmentPeakRms: 0,
       uploadQueue: Promise.resolve(),
       inflightUploads: new Set(),
       activeUploads: 0,

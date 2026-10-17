@@ -413,7 +413,7 @@ export default function LivePage() {
       const awake = await wakeApi(controller.signal);
       if (controller.signal.aborted) return;
       if (!awake) {
-        setError('Waking the Store Listen API… If this persists, the free cloud service may be restarting.');
+        setError('Waking the Store Listen API (free tier cold start). This can take up to a minute…');
       }
       try {
         const payload = await apiGetWithRetry<{ stores: { items: Store[] } }>(
@@ -430,7 +430,14 @@ export default function LivePage() {
         }
       }
     })();
-    return () => controller.abort();
+    // Keep free-tier API warm while Live Monitor stays open.
+    const keepAlive = window.setInterval(() => {
+      void wakeApi(controller.signal);
+    }, 240_000);
+    return () => {
+      controller.abort();
+      window.clearInterval(keepAlive);
+    };
   }, []);
 
   const storeRosterKey = stores.map((store) => store.id).join('|');

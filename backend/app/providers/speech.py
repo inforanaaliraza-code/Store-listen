@@ -356,7 +356,7 @@ class CloudSpeechProvider(SpeechProvider):
             logger.warning("Text translation fallback failed", exc_info=True)
         return ""
 
-    def transcribe_file(self, audio_path: str | Path, language_hint: str | None = None) -> SpeechResult:
+    def transcribe_file(self, audio_path: str | Path, language_hint: str | None = None, *, fast: bool = False) -> SpeechResult:
         if language_hint and not normalize_supported_language(language_hint):
             raise UnsupportedLanguageDetected(language_hint)
         config = resolve_speech_cloud_config()
@@ -378,15 +378,19 @@ class CloudSpeechProvider(SpeechProvider):
         # Never retry on hallucinated filler (Tchau/Obrigado/Thank you) — a second pass
         # on the same noise usually invents a different fake word.
         original, detected = self._transcribe_once(client, model, path, language=hint)
-        if not original and hint is None:
+        if not original and hint is None and not fast:
             alt_text, alt_lang = self._transcribe_once(client, model, path, language="es")
             if alt_text and not is_hallucinated_transcript(alt_text):
                 original, detected = alt_text, alt_lang or "es"
 
         original, language = _finalize_transcript(original, detected, hint)
         translated = original
-        # Always produce staff English whenever the spoken line is Spanish.
-        if settings.whisper_translate_spanish and (language == "es" or looks_like_spanish(original)):
+        # Live previews skip EN gloss so words appear immediately; finals still translate Spanish.
+        if (
+            not fast
+            and settings.whisper_translate_spanish
+            and (language == "es" or looks_like_spanish(original))
+        ):
             language = "es"
             polished = polish_spanish_translation(
                 original,
@@ -410,12 +414,13 @@ class CloudSpeechProvider(SpeechProvider):
 
         self.name = config["label"] or "cloud"
         logger.info(
-            "Cloud STT complete backend=%s model=%s language=%s chars=%s translated=%s",
+            "Cloud STT complete backend=%s model=%s language=%s chars=%s translated=%s fast=%s",
             self.name,
             model,
             language,
             len(original),
             language == "es" and translated != original,
+            fast,
         )
         return SpeechResult(original, language, translated, 0.92, True, "spk-unassigned")
 

@@ -23,21 +23,35 @@ from starlette.concurrency import run_in_threadpool
 from app.config import settings
 from app.database import SessionLocal, get_db
 
-# Free Render has one worker — serialize STT so /health never starves behind Whisper/Groq jobs.
-_stt_slots = asyncio.Semaphore(1)
+# Cloud Groq can run a few jobs in parallel; keep a small pool so /health stays responsive.
+_stt_slots = asyncio.Semaphore(3)
 
 
-async def _transcribe_audio_file(provider: Any, path: str, language_hint: str | None, *, wait: bool = True):
+async def _transcribe_audio_file(
+    provider: Any,
+    path: str,
+    language_hint: str | None,
+    *,
+    wait: bool = True,
+    fast: bool = False,
+):
     """Run provider.transcribe_file under a global STT slot."""
+
+    def _run():
+        try:
+            return provider.transcribe_file(path, language_hint, fast=fast)
+        except TypeError:
+            return provider.transcribe_file(path, language_hint)
+
     if wait:
         async with _stt_slots:
-            return await run_in_threadpool(provider.transcribe_file, path, language_hint)
+            return await run_in_threadpool(_run)
     try:
         await asyncio.wait_for(_stt_slots.acquire(), timeout=0.05)
     except TimeoutError:
         return None
     try:
-        return await run_in_threadpool(provider.transcribe_file, path, language_hint)
+        return await run_in_threadpool(_run)
     finally:
         _stt_slots.release()
 from app.models import (
@@ -1391,8 +1405,8 @@ async def preview_audio_transcription(
     try:
         with os.fdopen(fd, "wb") as audio_file:
             audio_file.write(audio_bytes)
-        # Skip preview when a final STT job already owns the slot — keep health/live finals responsive.
-        result = await _transcribe_audio_file(provider, temp_path, language_hint, wait=False)
+        # Fast preview: skip Spanish→English translate; non-blocking if STT pool is full.
+        result = await _transcribe_audio_file(provider, temp_path, language_hint, wait=False, fast=True)
         if result is None:
             return {
                 "segment": None,

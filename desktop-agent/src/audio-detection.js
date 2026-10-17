@@ -1,20 +1,20 @@
 (function initializeVoiceDetection(globalScope) {
   const config = Object.freeze({
-    // Ultra-sensitive store-counter gate (soft speech + distance mics).
-    minRms: 0.0028,
-    rmsThreshold: 0.004,
-    peakThreshold: 0.015,
-    snr: 1.2,
-    minSpeechRatio: 0.08,
-    minZcr: 0.006,
-    maxZcr: 0.62,
+    // Sensitive enough for soft counter speech; energy fallback covers spectrum misses.
+    minRms: 0.0025,
+    rmsThreshold: 0.0035,
+    peakThreshold: 0.012,
+    snr: 1.15,
+    minSpeechRatio: 0.07,
+    minZcr: 0.005,
+    maxZcr: 0.65,
     startFrames: 1,
     endFrames: 3,
-    silenceHangoverMs: 120,
-    // Very short clips + aggressive live previews for near-instant text.
-    maxSegmentMs: 360,
-    minClipMs: 100,
-    previewIntervalMs: 150,
+    silenceHangoverMs: 140,
+    // Longer finals = accurate STT; frequent previews = instant on-screen words.
+    maxSegmentMs: 900,
+    minClipMs: 280,
+    previewIntervalMs: 200,
     livePreviewEnabled: true,
   });
 
@@ -65,8 +65,7 @@
     const ratio = speechBandRatio(frequencyDb, sampleRate);
     const strongEnough = rms >= rmsFloor || peak >= config.peakThreshold;
     if (!strongEnough) return false;
-    // Energy-only fallback: loud enough frames count even if spectrum is noisy.
-    if (rms >= Math.max(config.rmsThreshold, rmsFloor * 1.15) || peak >= config.peakThreshold * 1.4) {
+    if (rms >= Math.max(config.rmsThreshold, rmsFloor) || peak >= config.peakThreshold) {
       return true;
     }
     if (ratio < config.minSpeechRatio) return false;
@@ -80,7 +79,7 @@
   }
 
   function createVoiceGate() {
-    let noiseRms = 0.003;
+    let noiseRms = 0.0025;
     let speaking = false;
     let voiced = 0;
     let silent = 0;
@@ -144,7 +143,7 @@
           hasSent = true;
           return true;
         }
-        const allowedAt = lastPreviewAt + Math.max(100, intervalMs);
+        const allowedAt = lastPreviewAt + Math.max(120, intervalMs);
         if (nowMs < allowedAt) return false;
         lastPreviewAt = nowMs;
         return true;
