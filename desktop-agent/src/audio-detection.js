@@ -11,10 +11,10 @@
     startFrames: 1,
     endFrames: 3,
     silenceHangoverMs: 140,
-    // Longer finals = accurate STT; frequent previews = instant on-screen words.
-    maxSegmentMs: 900,
-    minClipMs: 280,
-    previewIntervalMs: 200,
+    // ~1.4s phrases are long enough for accurate STT and still feel live.
+    maxSegmentMs: 1400,
+    minClipMs: 350,
+    previewIntervalMs: 600,
     livePreviewEnabled: true,
   });
 

@@ -30,10 +30,10 @@ test('voice gate opens quickly and streams short live clips', () => {
   assert.ok(config.endFrames <= 3, 'cut soon after a short pause for live feel');
   assert.ok(config.silenceHangoverMs <= 160, 'do not wait for a full sentence before uploading');
   assert.equal(config.livePreviewEnabled, true, 'live Whisper previews stream provisional words while speaking');
-  assert.ok(config.maxSegmentMs <= 1000, 'clips stay short enough for live finals');
-  assert.ok(config.maxSegmentMs >= 700, 'clips are long enough for accurate store STT');
-  assert.ok(config.minClipMs <= 320, 'allow short spoken bursts onto the live path');
-  assert.ok(config.previewIntervalMs <= 250, 'preview cadence stays under ~0.25s');
+  assert.ok(config.maxSegmentMs <= 1600, 'clips stay short enough for live finals');
+  assert.ok(config.maxSegmentMs >= 1200, 'clips are long enough for accurate store STT');
+  assert.ok(config.minClipMs <= 400, 'allow short spoken bursts onto the live path');
+  assert.ok(config.previewIntervalMs <= 700, 'preview cadence stays under ~0.7s');
   assert.ok(config.minRms <= 0.0035, 'soft store speech must still open the gate');
 
   const gate = createVoiceGate();

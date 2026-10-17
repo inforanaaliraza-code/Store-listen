@@ -23,8 +23,9 @@ from starlette.concurrency import run_in_threadpool
 from app.config import settings
 from app.database import SessionLocal, get_db
 
-# Cloud Groq can run a few jobs in parallel; keep a small pool so /health stays responsive.
-_stt_slots = asyncio.Semaphore(3)
+# Finals and live previews use separate pools so a preview burst cannot delay the real transcript.
+_final_slots = asyncio.Semaphore(2)
+_preview_slots = asyncio.Semaphore(1)
 
 
 async def _transcribe_audio_file(
@@ -43,17 +44,18 @@ async def _transcribe_audio_file(
         except TypeError:
             return provider.transcribe_file(path, language_hint)
 
+    slots = _final_slots if wait else _preview_slots
     if wait:
-        async with _stt_slots:
+        async with slots:
             return await run_in_threadpool(_run)
     try:
-        await asyncio.wait_for(_stt_slots.acquire(), timeout=0.05)
+        await asyncio.wait_for(slots.acquire(), timeout=0.01)
     except TimeoutError:
         return None
     try:
         return await run_in_threadpool(_run)
     finally:
-        _stt_slots.release()
+        slots.release()
 from app.models import (
     Alert,
     AiProcessingRun,

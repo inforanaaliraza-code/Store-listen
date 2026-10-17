@@ -182,7 +182,7 @@ ipcMain.handle('audio-upload', async (_event, payload) => {
       'X-Device-ID': payload.deviceId,
     },
     body: form,
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(28_000),
   });
   return readResponse(response);
 });
@@ -200,7 +200,7 @@ ipcMain.handle('audio-preview', async (_event, payload) => {
       'X-Device-ID': payload.deviceId,
     },
     body: form,
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(12_000),
   });
   return readResponse(response);
 });

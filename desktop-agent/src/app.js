@@ -5,9 +5,9 @@ const deviceHealth = window.StoreListenDeviceHealth;
 const { isDeviceSessionExpired } = window.StoreListenDeviceConfig;
 const { stopCaptureAndDrain } = window.StoreListenRecordingLifecycle;
 const { formatUserError } = window.StoreListenErrorMessages;
-const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 900;
-const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 280;
-const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 200, 120);
+const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 1400;
+const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 350;
+const PREVIEW_INTERVAL_MS = Math.max(voiceDetection.config?.previewIntervalMs ?? 600, 400);
 const LIVE_PREVIEW_ENABLED = voiceDetection.config?.livePreviewEnabled !== false;
 const RECORDER_TIMESLICE_MS = 100;
 const MAX_PARALLEL_UPLOADS = 3;
@@ -978,8 +978,8 @@ function beginRecorder(capture) {
   recorder.ondataavailable = (event) => {
     if (!event.data.size) return;
     chunks.push(event.data);
-    if (!LIVE_PREVIEW_ENABLED || !capture.requested || !capture.previewThrottle) return;
-    // Preview while there is energy — do not wait for a perfect VAD edge.
+    if (!LIVE_PREVIEW_ENABLED || !capture.requested || !capture.previewThrottle || capture.previewInFlight) return;
+    // One live preview at a time so finals are not stuck behind a preview pile-up.
     const active = capture.speaking
       || capture.spokeInSegment
       || (capture.segmentPeakRms || 0) >= (voiceDetection.config?.minRms || 0.0025);
@@ -989,6 +989,7 @@ function beginRecorder(capture) {
     const previewBlob = new Blob(chunks, { type: mimeType });
     if (previewBlob.size < 1200) return;
     const previewSequence = ++capture.previewSequence;
+    capture.previewInFlight = true;
     void (async () => {
       try {
         const response = await window.storeListen.previewAudio({
@@ -1013,6 +1014,8 @@ function beginRecorder(capture) {
         }
       } catch {
         // Final transcription remains authoritative if a provisional preview fails.
+      } finally {
+        capture.previewInFlight = false;
       }
     })();
   };
@@ -1082,8 +1085,9 @@ function monitorVoice(capture) {
       if (!capture.speaking || result.state === 'start' || energyStart) {
         capture.speaking = true;
         $('#captureTitle').textContent = 'Voice detected';
-        $('#captureMessage').textContent = 'Live words appear as you speak.';
+        $('#captureMessage').textContent = 'Hearing you — words appear as soon as speech is recognized.';
         setMicrophoneStatus('Voice detected', 'ok');
+        if (!capture.latestPreviewText) paintLiveTrail('…');
         setCaptureUi(true);
         sendHealth({ speaking: true });
       }

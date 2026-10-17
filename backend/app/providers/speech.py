@@ -371,6 +371,8 @@ class CloudSpeechProvider(SpeechProvider):
 
         client = self._openai_client(config)
         model = config["model"]
+        if fast and config["label"] == "groq":
+            model = "whisper-large-v3-turbo"
         hint = normalize_supported_language(language_hint)
         path = Path(audio_path)
 
