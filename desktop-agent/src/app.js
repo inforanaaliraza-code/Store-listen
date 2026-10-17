@@ -583,7 +583,7 @@ function createParagraphBlock(paragraph, index) {
     const tag = document.createElement('span');
     tag.className = 'transcript-en-tag';
     tag.textContent = 'EN';
-    en.append(tag, document.createTextNode(` ${englishText || 'Translating…'}`));
+    en.append(tag, document.createTextNode(` ${englishText || 'Translation unavailable'}`));
     item.append(en);
   }
   return item;
@@ -881,18 +881,22 @@ function addTranscript(segment) {
   if (!session) return;
   const text = (segment.originalText || '').trim();
   if (!text || isClientJunkTranscript(text)) return;
-  const last = session.entries[session.entries.length - 1];
-  if (last?.segment?.originalText?.trim().toLowerCase() === text.toLowerCase()) {
-    const lastAt = last.capturedAt?.getTime?.() || 0;
-    if (Date.now() - lastAt < 4_000) return;
-  }
-  const capturedAt = new Date();
+  const offset = Number(segment.sessionOffsetSeconds);
+  const capturedAt = Number.isFinite(offset)
+    ? new Date(session.startedAt.getTime() + Math.max(0, offset) * 1000)
+    : new Date();
+  if (session.entries.some((entry) => (
+    entry.segment.originalText?.trim().toLowerCase() === text.toLowerCase()
+    && Math.abs(entry.capturedAt.getTime() - capturedAt.getTime()) < 4_000
+  ))) return;
   const entry = {
     number: session.entries.length + 1,
     segment: { ...segment, speakerLabel: normalizeSpeakerLabel(segment.speakerLabel) },
     capturedAt,
   };
   session.entries.push(entry);
+  session.entries.sort((left, right) => left.capturedAt - right.capturedAt);
+  session.entries.forEach((item, index) => { item.number = index + 1; });
   const pendingLive = state.capture?.latestPreviewText || '';
   clearLivePartial();
   saveTranscriptArchive();
@@ -955,6 +959,7 @@ async function uploadSegment(capture, blob, sequence, offset, duration) {
   setText('#liveTranscriptPreviewText', '');
   if (response.segment) addTranscript({
     ...response.segment,
+    sessionOffsetSeconds: offset,
     transcriptionMs: response.transcription_ms,
     roundTripMs: Math.round(performance.now() - uploadStartedAt),
     speechProvider: response.speech_provider,

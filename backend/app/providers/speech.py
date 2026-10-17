@@ -237,7 +237,7 @@ class WhisperSpeechProvider(SpeechProvider):
         model = self._get_model()
         segments, info = model.transcribe(str(audio_path), **self._transcribe_kwargs(language_hint))
         segment_list = list(segments)
-        original = " ".join(segment.text.strip() for segment in segment_list).strip()
+        original = filter_whisper_segments(segment_list) or ""
         original, language = _finalize_transcript(original, getattr(info, "language", None), language_hint)
         confidence = sum(segment.avg_logprob for segment in segment_list) / max(len(segment_list), 1)
         confidence = max(0.0, min(1.0, 2.71828**confidence))

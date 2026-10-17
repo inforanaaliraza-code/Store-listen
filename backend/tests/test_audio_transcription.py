@@ -211,6 +211,26 @@ def test_whisper_uses_configured_low_latency_beam_size(monkeypatch, tmp_path):
     assert calls[0]["no_speech_threshold"] == 0.65
 
 
+def test_whisper_drops_noise_marked_segments_and_keeps_clear_speech(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    class NoisyModel:
+        def transcribe(self, audio_path, **kwargs):
+            segments = [
+                SimpleNamespace(text=" Do you have a charger?", no_speech_prob=0.02, avg_logprob=-0.2, compression_ratio=1.1),
+                SimpleNamespace(text=" Thanks for watching", no_speech_prob=0.97, avg_logprob=-0.8, compression_ratio=1.2),
+            ]
+            return iter(segments), SimpleNamespace(language="en")
+
+    monkeypatch.setattr(WhisperSpeechProvider, "_get_model", lambda _self: NoisyModel())
+    audio_path = tmp_path / "noisy-sample.webm"
+    audio_path.write_bytes(b"sample audio")
+
+    result = WhisperSpeechProvider().transcribe_file(audio_path, "en")
+
+    assert result.original_text == "Do you have a charger?"
+
+
 def test_whisper_skips_second_spanish_translation_pass_by_default(monkeypatch, tmp_path):
     from types import SimpleNamespace
 

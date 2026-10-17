@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = tools;
   if (root) root.StoreListenTranscript = tools;
 })(typeof window === 'undefined' ? null : window, () => {
-  const PARAGRAPH_GAP_MS = 60_000;
+  const PARAGRAPH_GAP_MS = 12_000;
 
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -80,16 +80,41 @@
     return entry || {};
   }
 
+  const SHORT_SPANISH = new Set([
+    'hola', 'gracias', 'adios', 'adiós', 'si', 'sí', 'bueno', 'buenas', 'buenos',
+    'perdon', 'perdón', 'ayuda', 'claro', 'por favor',
+  ]);
+  const SPANISH_WORDS = new Set([
+    'hola', 'gracias', 'senor', 'señor', 'tenemos', 'producto', 'necesito', 'quiero',
+    'cuanto', 'cuánto', 'favor', 'dolares', 'dólares', 'buenos', 'buenas', 'adios',
+    'adiós', 'cargador', 'precio', 'donde', 'dónde', 'telefono', 'teléfono', 'ayuda',
+    'puedo', 'esta', 'está', 'tiene', 'tienen', 'por',
+  ]);
+  const ENGLISH_WORDS = new Set([
+    'hello', 'hi', 'hey', 'i', 'im', 'i\'m', 'we', 'you', 'the', 'this', 'that',
+    'need', 'want', 'have', 'please', 'yes', 'no', 'charger', 'phone', 'price',
+    'welcome', 'channel', 'everyone', 'newbie', 'my', 'to', 'a', 'is', 'are',
+  ]);
+
   function looksLikeSpanishText(text) {
-    const value = String(text || '');
-    if (/[¿¡ñáéíóúü]/i.test(value)) return true;
+    return isSpanishUtterance(text);
+  }
+
+  function isSpanishUtterance(text, language) {
+    const value = String(text || '').trim();
+    if (!value) return false;
     const lowered = value.toLowerCase();
-    const hits = [
-      'hola', 'gracias', 'señor', 'senor', 'tenemos', 'producto', 'necesito', 'cuanto', 'cuánto',
-      'por favor', 'dolares', 'dólares', 'buenos', 'buenas', 'adios', 'adiós', 'este', 'pocos',
-      'solo', 'unos', 'sí', 'si senor', 'si señor',
-    ];
-    return hits.filter((token) => lowered.includes(token)).length >= 1;
+    const phrase = lowered.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!phrase) return false;
+    if (SHORT_SPANISH.has(phrase) || SHORT_SPANISH.has(lowered)) return true;
+    const words = phrase.split(' ').filter(Boolean);
+    const spanishCount = words.filter((word) => SPANISH_WORDS.has(word)).length;
+    const englishCount = words.filter((word) => ENGLISH_WORDS.has(word)).length;
+    if (spanishCount >= 2 && spanishCount > englishCount) return true;
+    if ((language || '').toLowerCase() === 'es' && englishCount === 0) return true;
+    if ((language || '').toLowerCase() === 'es' && spanishCount >= 1 && spanishCount >= englishCount) return true;
+    if (/[¿¡ñáéíóúü]/i.test(value) && spanishCount >= 1 && englishCount === 0) return true;
+    return false;
   }
 
   function paragraphParts(entries) {
@@ -99,9 +124,9 @@
       if (!original) return null;
       const translated = String(segment.translatedText || entry.translated || '').trim();
       const language = String(segment.language || entry.language || 'en').toLowerCase();
-      const spanish = language === 'es' || looksLikeSpanishText(original);
+      const spanish = isSpanishUtterance(original, language);
       if (spanish) {
-        const translation = translated && translated !== original && !looksLikeSpanishText(translated)
+        const translation = translated && translated !== original && !isSpanishUtterance(translated)
           ? translated
           : '';
         return { kind: 'es', original, translation };
@@ -116,10 +141,11 @@
 
   function formatParagraphStaffEnglish(entries) {
     const parts = paragraphParts(entries);
-    if (!parts.some((part) => part.kind === 'es')) return '';
-    return parts.map((part) => (
-      part.kind === 'es' ? (part.translation || part.original) : part.original
-    )).join(' ');
+    return parts
+      .filter((part) => part.kind === 'es')
+      .map((part) => part.translation)
+      .filter(Boolean)
+      .join(' ');
   }
 
   function formatParagraphEnglish(entries) {
@@ -185,7 +211,7 @@
           number: entry.number,
         }
       ));
-      const english = formatParagraphEnglish(mapped);
+      const english = formatParagraphStaffEnglish(mapped);
       const spoken = formatParagraphSpoken(mapped);
       const stamp = typeof paragraph.startedAt === 'number'
         ? formatTime(paragraph.startedAt)
@@ -210,6 +236,7 @@
     groupEntriesIntoParagraphs,
     paragraphParts,
     looksLikeSpanishText,
+    isSpanishUtterance,
     formatParagraphSpoken,
     formatParagraphStaffEnglish,
     formatParagraphEnglish,

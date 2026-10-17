@@ -28,17 +28,30 @@ test('normalizes persisted capture and line timestamps and caps archives', () =>
   assert.equal(normalizeSessions(Array.from({ length: 501 }, (_, index) => ({ id: String(index), startedAt: '2026-10-13' }))).length, 500);
 });
 
-test('groups speech into paragraphs after one minute of silence', () => {
+test('groups speech into paragraphs after a conversational pause', () => {
   const paragraphs = groupEntriesIntoParagraphs([
     { number: 1, capturedAt: new Date('2026-10-13T12:00:00.000Z'), segment: { originalText: 'Hello', language: 'en' } },
-    { number: 2, capturedAt: new Date('2026-10-13T12:00:20.000Z'), segment: { originalText: 'Gracias', translatedText: 'Thank you', language: 'es' } },
-    { number: 3, capturedAt: new Date('2026-10-13T12:01:30.000Z'), segment: { originalText: 'Need a charger', language: 'en' } },
+    { number: 2, capturedAt: new Date('2026-10-13T12:00:08.000Z'), segment: { originalText: 'Gracias', translatedText: 'Thank you', language: 'es' } },
+    { number: 3, capturedAt: new Date('2026-10-13T12:00:30.000Z'), segment: { originalText: 'Need a charger', language: 'en' } },
   ]);
   assert.equal(paragraphs.length, 2);
   assert.equal(paragraphs[0].entries.length, 2);
   assert.equal(paragraphs[1].entries.length, 1);
   assert.match(formatParagraphPlain(paragraphs[0].entries), /Hello Gracias/);
-  assert.match(formatParagraphPlain(paragraphs[0].entries), /EN: Hello Thank you/);
+  assert.match(formatParagraphPlain(paragraphs[0].entries), /EN: Thank you/);
+  assert.doesNotMatch(formatParagraphPlain(paragraphs[0].entries), /EN: Hello Thank you/);
+});
+
+test('English speech does not get an EN translation line even if it contains gracias', () => {
+  const { isSpanishUtterance, formatParagraphStaffEnglish } = require('../src/transcript-utils');
+  const mixed = "Hello, I'm a newbie Hi everyone, welcome to my channel Gracias Hello";
+  assert.equal(isSpanishUtterance(mixed, 'en'), false);
+  assert.equal(isSpanishUtterance('Necesito un cargador', 'es'), true);
+  assert.equal(isSpanishUtterance('Gracias', 'es'), true);
+  const englishOnly = formatParagraphStaffEnglish([
+    { segment: { originalText: mixed, translatedText: mixed, language: 'en' } },
+  ]);
+  assert.equal(englishOnly, '');
 });
 
 test('TXT export uses paragraph flow with staff English line', () => {

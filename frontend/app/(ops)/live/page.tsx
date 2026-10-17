@@ -44,7 +44,7 @@ type StreamCard = {
   deviceConnected: boolean;
 };
 
-const PARAGRAPH_GAP_MS = 60_000;
+const PARAGRAPH_GAP_MS = 12_000;
 const JUNK_EXACT = new Set([
   'tchau', 'chao', 'obrigado', 'obrigada', 'adeus', 'valeu', 'ciao',
   'e ai', 'ai', 'ei', 'oie', 'opa',
@@ -177,7 +177,7 @@ export default function LivePage() {
           : (segment.speaker_label || 'Speaker'),
         language: segment.language,
         original: segment.original_text,
-        translated: segment.translated_text || segment.original_text,
+        translated: segment.translated_text || '',
         confidence: segment.confidence,
         final: true,
         at: Date.parse(startedAtIso) + segment.start_time * 1000,
@@ -343,7 +343,7 @@ export default function LivePage() {
         speaker: event.speakerLabel || event.speakerId || 'Speaker',
         language: event.language || 'en',
         original: event.originalText || '',
-        translated: event.translatedText || event.originalText || '',
+        translated: event.translatedText || '',
         confidence: event.confidence || 0,
         final: true,
         at: Date.parse(event.timestamp || '') || Date.now(),
@@ -594,7 +594,7 @@ export default function LivePage() {
                           </header>
                           <p className="monitor-paragraph-body">{spoken || 'No speech detected.'}</p>
                           {hasSpanish ? (
-                            <p className="monitor-paragraph-en"><span className="monitor-en-tag">EN</span> {english || 'Translating…'}</p>
+                            <p className="monitor-paragraph-en"><span className="monitor-en-tag">EN</span> {english || 'Translation unavailable'}</p>
                           ) : null}
                         </article>
                       );

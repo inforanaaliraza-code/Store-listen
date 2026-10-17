@@ -100,6 +100,7 @@ export default function DashboardPage() {
             speakerLabel?: string;
             originalText?: string;
             translatedText?: string;
+            language?: string;
             conversationId?: string;
             captureSequence?: number;
             previewSequence?: number;
@@ -123,7 +124,14 @@ export default function DashboardPage() {
           if (event.event === 'transcript.final' && event.originalText) {
             finalCaptureSequences.set(conversationId, Math.max(finalCaptureSequences.get(conversationId) ?? 0, event.captureSequence ?? 0));
             previewSequences.delete(conversationId);
-            const english = event.translatedText || event.originalText || '';
+            const original = event.originalText.trim();
+            const translated = event.translatedText?.trim() || '';
+            const spanish = event.language?.toLowerCase().startsWith('es') ?? false;
+            const english = translated && translated !== original
+              ? translated
+              : spanish
+                ? 'Spanish speech recognized; English translation unavailable'
+                : original;
             const line: LiveLine = {
               id: event.segmentId || `${event.timestamp}-${Math.random()}`,
               storeId: event.storeId || storeId,
