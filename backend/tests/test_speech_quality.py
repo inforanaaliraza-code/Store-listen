@@ -25,6 +25,8 @@ def test_rejects_portuguese_and_random_single_words():
     assert is_hallucinated_transcript("E ai")
     assert not is_hallucinated_transcript("Gracias")
     assert not is_hallucinated_transcript("¡Adiós!")
+    assert not is_hallucinated_transcript("Price")
+    assert not is_hallucinated_transcript("Phone")
 
 
 def test_spanish_short_translation_is_stable():

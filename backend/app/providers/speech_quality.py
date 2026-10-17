@@ -263,8 +263,8 @@ def is_hallucinated_transcript(text: str) -> bool:
             return False
         if token in _ALLOWED_SHORT_EN and token not in {"thanks", "thank"}:
             return False
-        # Unknown one-word clips are usually Whisper noise inventions.
-        if len(token) <= 6:
+        # Only drop tiny filler tokens. Real one-word store speech ("price", "phone") must show.
+        if len(token) <= 2:
             return True
 
     # Ultra-short unclear clips like "E aí" / "ei ei" — not real store speech.

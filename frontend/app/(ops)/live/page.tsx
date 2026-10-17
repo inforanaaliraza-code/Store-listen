@@ -65,9 +65,10 @@ function isJunkTranscript(text: string) {
   const phrase = normalizeJunkPhrase(text || '');
   if (!phrase) return true;
   if (JUNK_EXACT.has(phrase)) return true;
+  if (phrase.includes('terima kasih') || phrase.includes('thanks for watching')) return true;
   const words = phrase.split(' ').filter(Boolean);
-  if (words.length === 1 && words[0].length <= 6 && !ALLOWED_SHORT.has(words[0])) return true;
-  if (words.length <= 2 && words.every((word) => word.length <= 3) && !words.some((word) => ALLOWED_SHORT.has(word))) {
+  if (words.length === 1 && words[0].length <= 2 && !ALLOWED_SHORT.has(words[0])) return true;
+  if (words.length <= 2 && words.every((word) => word.length <= 2) && !words.some((word) => ALLOWED_SHORT.has(word))) {
     return true;
   }
   return false;
@@ -266,11 +267,16 @@ export default function LivePage() {
         deviceConnected: Boolean(storeMap[storeId]?.device_connected),
       };
       segmentIdsRef.current.set(storeId, new Set());
-      if (accepted) {
-        setActiveByStore((current) => ({ ...current, [storeId]: card }));
-      } else {
-        upsertPending(card);
+      if (!acceptedIdsRef.current.includes(storeId)) {
+        acceptedIdsRef.current = [...acceptedIdsRef.current, storeId];
+        setAcceptedIds(acceptedIdsRef.current);
       }
+      setPendingByStore((current) => {
+        const next = { ...current };
+        delete next[storeId];
+        return next;
+      });
+      setActiveByStore((current) => ({ ...current, [storeId]: card }));
       return;
     }
 
@@ -287,35 +293,33 @@ export default function LivePage() {
       return;
     }
 
-    if (!accepted) {
-      if (event.event === 'transcript.final' && event.originalText && !isJunkTranscript(event.originalText)) {
-        upsertPending({
-          storeId,
-          conversationId: event.conversationId || pending?.conversationId || '',
-          status: 'LIVE',
-          startedAt: pending?.startedAt || Date.parse(event.timestamp || '') || Date.now(),
-          lines: pending?.lines || [],
-          partial: '',
-          deviceConnected: Boolean(storeMap[storeId]?.device_connected),
-        });
-      }
-      return;
-    }
+    const isLiveSpeech = event.event === 'voice.detected'
+      || event.event === 'transcript.partial'
+      || event.event === 'transcript.final';
+    if (!isLiveSpeech) return;
 
-    if (event.event === 'voice.detected') {
-      patchActive(storeId, { partial: event.label || 'Voice detected' });
+    if (!acceptedIdsRef.current.includes(storeId)) {
+      acceptedIdsRef.current = [...acceptedIdsRef.current, storeId];
+      setAcceptedIds(acceptedIdsRef.current);
     }
-    if (event.event === 'transcript.partial' && event.originalText) {
-      patchActive(storeId, { partial: event.originalText });
-    }
+    setPendingByStore((current) => {
+      if (!current[storeId]) return current;
+      const next = { ...current };
+      delete next[storeId];
+      return next;
+    });
+
+    if (event.event === 'transcript.final' && isJunkTranscript(event.originalText || '')) return;
+    if (event.event === 'transcript.partial' && !event.originalText) return;
+
+    let line: Line | null = null;
     if (event.event === 'transcript.final') {
-      if (isJunkTranscript(event.originalText || '')) return;
       const segmentId = event.segmentId || `${event.timestamp}-${Math.random()}`;
       const known = segmentIdsRef.current.get(storeId) || new Set<string>();
       if (known.has(segmentId)) return;
       known.add(segmentId);
       segmentIdsRef.current.set(storeId, known);
-      const line: Line = {
+      line = {
         id: segmentId,
         conversationId: event.conversationId || '',
         speaker: event.speakerLabel || event.speakerId || 'Speaker',
@@ -326,15 +330,37 @@ export default function LivePage() {
         final: true,
         at: Date.parse(event.timestamp || '') || Date.now(),
       };
-      patchActive(storeId, (card) => ({
-        ...card,
-        status: 'LIVE',
-        conversationId: event.conversationId || card.conversationId,
-        partial: '',
-        lines: [...card.lines, line],
-      }));
     }
-  }, [patchActive, storeMap, upsertPending]);
+
+    setActiveByStore((current) => {
+      const existing = current[storeId] || pending || {
+        storeId,
+        conversationId: event.conversationId || '',
+        status: 'LIVE' as const,
+        startedAt: Date.parse(event.timestamp || '') || Date.now(),
+        lines: [],
+        partial: '',
+        deviceConnected: Boolean(storeMap[storeId]?.device_connected),
+      };
+      if (event.event === 'voice.detected') {
+        return { ...current, [storeId]: { ...existing, partial: event.label || 'Voice detected', status: 'LIVE' } };
+      }
+      if (event.event === 'transcript.partial') {
+        return { ...current, [storeId]: { ...existing, partial: event.originalText || '', status: 'LIVE', conversationId: event.conversationId || existing.conversationId } };
+      }
+      if (!line) return current;
+      return {
+        ...current,
+        [storeId]: {
+          ...existing,
+          status: 'LIVE',
+          conversationId: event.conversationId || existing.conversationId,
+          partial: '',
+          lines: [...existing.lines, line],
+        },
+      };
+    });
+  }, [storeMap]);
 
   const connectStore = useCallback((storeId: string) => {
     if (!WS_URL) {
