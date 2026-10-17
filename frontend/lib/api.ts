@@ -210,8 +210,57 @@ export async function apiPost<T>(path: string, body?: unknown, timeoutMs = REQUE
     timeoutMs,
   );
   redirectAfterUnauthorized(path, response);
-  if (!response.ok) await throwResponseError(response, 'Request failed');
+  if (!response.ok) {
+    if (response.status === 502 || response.status === 503 || response.status === 504) {
+      throw new ApiError(
+        'The Store Listen API is starting up. Wait a few seconds and try again.',
+        response.status,
+        response.headers.get('x-request-id') ?? undefined,
+        'SERVICE_UNAVAILABLE',
+      );
+    }
+    await throwResponseError(response, 'Request failed');
+  }
   return readJson<T>(response);
+}
+
+/** Wake a cold free-tier API, then POST with retries (login / critical ops). */
+export async function apiPostWithWake<T>(
+  path: string,
+  body?: unknown,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+  attempts = 4,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      if (attempt === 0) await wakeApi();
+      return await apiPost<T>(path, body, timeoutMs);
+    } catch (cause) {
+      lastError = cause;
+      const retryable = cause instanceof ApiError
+        && (
+          cause.code === 'NETWORK_ERROR'
+          || cause.code === 'TIMEOUT'
+          || cause.code === 'SERVICE_UNAVAILABLE'
+          || cause.status >= 500
+          || cause.status === 0
+        );
+      if (!retryable || attempt === attempts - 1) {
+        if (cause instanceof ApiError && (cause.code === 'NETWORK_ERROR' || cause.status === 0)) {
+          throw new ApiError(
+            'The Store Listen API is waking up (free tier). Wait ~30s and sign in again.',
+            0,
+            undefined,
+            'NETWORK_ERROR',
+          );
+        }
+        throw cause;
+      }
+      await new Promise((resolve) => globalThis.setTimeout(resolve, Math.min(2000 * (attempt + 1), 8000)));
+    }
+  }
+  throw lastError;
 }
 export const apiPatch = <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body: body === undefined ? undefined : JSON.stringify(body) });
 export const apiDelete = <T>(path: string) => request<T>(path, { method: 'DELETE' });
