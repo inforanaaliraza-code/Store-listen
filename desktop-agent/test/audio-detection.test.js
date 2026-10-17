@@ -26,15 +26,13 @@ function spectrum(speechDb, noiseDb) {
 }
 
 test('voice gate opens quickly and streams short live clips', () => {
-  assert.ok(config.startFrames <= 1, 'open the gate on the first voiced frame');
-  assert.ok(config.endFrames <= 3, 'cut soon after a short pause for live feel');
-  assert.ok(config.silenceHangoverMs <= 160, 'do not wait for a full sentence before uploading');
-  assert.equal(config.livePreviewEnabled, true, 'live Whisper previews stream provisional words while speaking');
-  assert.ok(config.maxSegmentMs <= 1600, 'clips stay short enough for live finals');
-  assert.ok(config.maxSegmentMs >= 1200, 'clips are long enough for accurate store STT');
-  assert.ok(config.minClipMs <= 400, 'allow short spoken bursts onto the live path');
-  assert.ok(config.previewIntervalMs <= 700, 'preview cadence stays under ~0.7s');
-  assert.ok(config.minRms <= 0.0035, 'soft store speech must still open the gate');
+  assert.ok(config.startFrames <= 2, 'open the gate within two voiced frames');
+  assert.ok(config.endFrames <= 6, 'end the phrase after a short pause');
+  assert.ok(config.silenceHangoverMs <= 450, 'do not hold a finished phrase');
+  assert.equal(config.livePreviewEnabled, false, 'one final transcript per phrase, no competing preview');
+  assert.ok(config.maxSegmentMs <= 5000 && config.maxSegmentMs >= 3000, 'a phrase is long enough to transcribe accurately');
+  assert.ok(config.minClipMs >= 400 && config.minClipMs <= 700, 'skip noise blips, keep real words');
+  assert.ok(config.minRms <= 0.008, 'soft store speech must still open the gate');
 
   const gate = createVoiceGate();
   const speech = tone(512, 0.1);

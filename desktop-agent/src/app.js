@@ -1044,9 +1044,9 @@ function beginRecorder(capture) {
       const sequence = ++capture.sequence;
       enqueueUpload(capture, blob, sequence, offset, duration);
     }
-    // Continuous capture while LIVE — do not wait for the next VAD start.
-    if (capture.requested) {
-      setMicrophoneStatus('Microphone is active', 'ok');
+    // Next phrase starts only while the person is still talking.
+    if (capture.requested && capture.speaking) {
+      setMicrophoneStatus('Voice detected', 'ok');
       beginRecorder(capture);
     }
   };
@@ -1060,42 +1060,33 @@ function monitorVoice(capture) {
   const samples = new Float32Array(capture.analyser.fftSize);
   const spectrum = new Float32Array(capture.analyser.frequencyBinCount);
   const gate = voiceDetection.createVoiceGate ? voiceDetection.createVoiceGate() : null;
-  // Keep short clips rolling the whole session so speech is never missed between VAD edges.
-  beginRecorder(capture);
   const tick = () => {
     if (!capture.requested) return;
     capture.analyser.getFloatTimeDomainData(samples);
     capture.analyser.getFloatFrequencyData(spectrum);
     const energy = voiceDetection.calculateAudioEnergy?.(samples) || { rms: 0, peak: 0 };
     capture.segmentPeakRms = Math.max(capture.segmentPeakRms || 0, energy.rms || 0);
-    const energyStart = voiceDetection.shouldVoiceTrigger?.(samples)
-      || energy.rms >= (voiceDetection.config?.minRms || 0.0025);
-    updateMicWaveform(samples, capture.speaking || energyStart);
-    if (!capture.recorder) beginRecorder(capture);
+    updateMicWaveform(samples, capture.speaking);
     const result = gate
       ? gate.observe(samples, spectrum, capture.audioContext.sampleRate, performance.now())
-      : { state: (energyStart ? 'start' : 'idle') };
-    const voiced = result.state === 'start'
-      || result.state === 'speech'
-      || result.state === 'rising'
-      || result.state === 'hangover'
-      || energyStart;
-    if (voiced) {
+      : { state: 'idle' };
+    if (result.state === 'start' || result.state === 'speech' || result.state === 'rising') {
       capture.spokeInSegment = true;
-      if (!capture.speaking || result.state === 'start' || energyStart) {
+      if (!capture.speaking || result.state === 'start') {
         capture.speaking = true;
         $('#captureTitle').textContent = 'Voice detected';
-        $('#captureMessage').textContent = 'Hearing you — words appear as soon as speech is recognized.';
+        $('#captureMessage').textContent = 'Phrase is recording. The line appears as soon as you pause.';
         setMicrophoneStatus('Voice detected', 'ok');
-        if (!capture.latestPreviewText) paintLiveTrail('…');
         setCaptureUi(true);
         sendHealth({ speaking: true });
       }
+      if (!capture.recorder) beginRecorder(capture);
     } else if (result.state === 'end') {
       capture.speaking = false;
       setMicrophoneStatus('Microphone is active', 'ok');
       setCaptureUi(true);
       sendHealth({ speaking: false });
+      if (capture.recorder?.state === 'recording') capture.recorder.stop();
     }
     capture.voiceFrame = window.requestAnimationFrame(tick);
   };

@@ -331,23 +331,8 @@ class CloudSpeechProvider(SpeechProvider):
         return sanitize_transcript(completion.choices[0].message.content or "")
 
     def _translate_to_english(self, client, config: dict[str, str], path: Path, spanish_text: str) -> str:
-        """Produce English for staff. Prefer Whisper translate; fall back to chat."""
-        filename = path.name or f"audio{path.suffix or '.webm'}"
-        translate_model = GROQ_TRANSLATE_MODEL if config["label"] == "groq" else config["model"]
-        try:
-            with path.open("rb") as audio_file:
-                result = client.audio.translations.create(
-                    model=translate_model if "whisper" in translate_model else "whisper-1",
-                    file=(filename, audio_file),
-                    response_format="json",
-                    temperature=0,
-                )
-            translated = sanitize_transcript(getattr(result, "text", None) or "")
-            if is_usable_english_translation(spanish_text, translated):
-                return translated
-        except Exception:
-            logger.info("Audio translate endpoint unavailable; falling back to text translation", exc_info=True)
-
+        """Translate the transcript text. A second Whisper pass hears the clip differently and slows the line."""
+        del path
         try:
             translated = self._chat_translate_spanish(client, config, spanish_text)
             if is_usable_english_translation(spanish_text, translated):

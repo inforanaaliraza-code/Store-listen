@@ -1,21 +1,21 @@
 (function initializeVoiceDetection(globalScope) {
   const config = Object.freeze({
-    // Sensitive enough for soft counter speech; energy fallback covers spectrum misses.
-    minRms: 0.0025,
-    rmsThreshold: 0.0035,
-    peakThreshold: 0.012,
-    snr: 1.15,
-    minSpeechRatio: 0.07,
-    minZcr: 0.005,
-    maxZcr: 0.65,
-    startFrames: 1,
-    endFrames: 3,
-    silenceHangoverMs: 140,
-    // ~1.4s phrases are long enough for accurate STT and still feel live.
-    maxSegmentMs: 1400,
-    minClipMs: 350,
-    previewIntervalMs: 600,
-    livePreviewEnabled: true,
+    // Real speech only. Room noise must not open the gate or become a fake line.
+    minRms: 0.006,
+    rmsThreshold: 0.009,
+    peakThreshold: 0.028,
+    snr: 1.4,
+    minSpeechRatio: 0.2,
+    minZcr: 0.008,
+    maxZcr: 0.55,
+    startFrames: 2,
+    endFrames: 6,
+    silenceHangoverMs: 420,
+    // One phrase per upload: accurate text, then it shows on desktop and dashboard together.
+    maxSegmentMs: 5000,
+    minClipMs: 500,
+    previewIntervalMs: 900,
+    livePreviewEnabled: false,
   });
 
   function calculateAudioEnergy(samples) {
@@ -65,9 +65,6 @@
     const ratio = speechBandRatio(frequencyDb, sampleRate);
     const strongEnough = rms >= rmsFloor || peak >= config.peakThreshold;
     if (!strongEnough) return false;
-    if (rms >= Math.max(config.rmsThreshold, rmsFloor) || peak >= config.peakThreshold) {
-      return true;
-    }
     if (ratio < config.minSpeechRatio) return false;
     const rumble = ratio < 0.12 && zcr < 0.005 && peak < 0.04;
     return !rumble;
