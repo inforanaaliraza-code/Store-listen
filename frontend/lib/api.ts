@@ -211,7 +211,10 @@ export async function apiPost<T>(path: string, body?: unknown, timeoutMs = REQUE
   );
   redirectAfterUnauthorized(path, response);
   if (!response.ok) {
-    if (response.status === 502 || response.status === 503 || response.status === 504) {
+    const contentType = response.headers.get('content-type') ?? '';
+    const gatewayAsleep = (response.status === 502 || response.status === 503 || response.status === 504)
+      && !contentType.includes('json');
+    if (gatewayAsleep) {
       throw new ApiError(
         'The Store Listen API is starting up. Wait a few seconds and try again.',
         response.status,

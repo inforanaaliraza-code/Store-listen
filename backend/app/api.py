@@ -1020,10 +1020,8 @@ def generate_conversation_report_for_conversation(
     conversation = _scoped_record(db, Conversation, conversation_id, user)
     if not conversation:
         raise HTTPException(404, "Conversation not found")
-    if settings.ai_provider != "gemini":
-        raise HTTPException(503, "Configure AI_PROVIDER=gemini to generate real conversation reports.")
-    if not settings.gemini_api_key:
-        raise HTTPException(503, "GEMINI_API_KEY is missing. Add a Google AI Studio API key to the backend environment.")
+    if not (settings.gemini_api_key or "").strip() and not (settings.groq_api_key or "").strip():
+        raise HTTPException(503, "Add GEMINI_API_KEY or GROQ_API_KEY to generate conversation reports.")
 
     segments = db.query(TranscriptSegment).filter(
         TranscriptSegment.conversation_id == conversation_id
@@ -1046,7 +1044,7 @@ def generate_conversation_report_for_conversation(
                 continue
             except Exception as exc:
                 logger.exception("Report transcription failed conversation_id=%s recording_id=%s", conversation_id, recording.id)
-                raise HTTPException(503, "Local transcription failed while preparing the report. Check Whisper and retained audio, then retry.") from exc
+                raise HTTPException(503, "Transcription failed while preparing the report. Check the speech provider and retained audio, then retry.") from exc
             speaker_id = (
                 "speaker-customer" if recording.speaker_role == "customer"
                 else "speaker-employee-recorded" if recording.speaker_role == "employee"
@@ -1077,11 +1075,14 @@ def generate_conversation_report_for_conversation(
     transcript = []
     for segment in segments:
         role = "customer" if segment.speaker_id == "speaker-customer" else "employee" if segment.speaker_id.startswith("speaker-employee-") else "unknown"
+        spoken = (segment.original_text or "").strip()
+        english = (segment.translated_text or "").strip()
         transcript.append({
             "role": role,
             "language": segment.language,
             "time_seconds": round(segment.start_time, 2),
-            "text": segment.original_text,
+            "text": english or spoken,
+            "original_text": spoken,
         })
     try:
         report = generate_conversation_report(transcript)
@@ -1089,7 +1090,7 @@ def generate_conversation_report_for_conversation(
         raise HTTPException(503, str(exc)) from exc
     except Exception as exc:
         logger.exception("Conversation report generation failed conversation_id=%s", conversation_id)
-        raise HTTPException(502, "Gemini could not generate this report. Check provider access and retry.") from exc
+        raise HTTPException(502, "The report provider could not generate this report. Check provider access and retry.") from exc
 
     report_payload = {
         "summary": report.summary,
@@ -1105,7 +1106,7 @@ def generate_conversation_report_for_conversation(
     report_id = _conversation_report_run_id(conversation_id)
     saved_run = db.get(AiProcessingRun, report_id)
     if saved_run:
-        saved_run.provider = "gemini"
+        saved_run.provider = report.provider
         saved_run.status = "completed"
         saved_run.input_excerpt = "[conversation-report] " + " ".join(item["text"] for item in transcript)[:280]
         saved_run.output_json = json.dumps({"kind": "conversation_report", "report": report_payload})
@@ -1113,7 +1114,7 @@ def generate_conversation_report_for_conversation(
         db.add(AiProcessingRun(
             id=report_id,
             conversation_id=conversation_id,
-            provider="gemini",
+            provider=report.provider,
             status="completed",
             input_excerpt="[conversation-report] " + " ".join(item["text"] for item in transcript)[:280],
             output_json=json.dumps({"kind": "conversation_report", "report": report_payload}),
@@ -1124,7 +1125,7 @@ def generate_conversation_report_for_conversation(
         action="conversation.report.generate",
         entity="conversation_report",
         entity_id=conversation_id,
-        detail=f"provider=gemini;segments={len(segments)}",
+        detail=f"provider={report.provider};segments={len(segments)}",
     ))
     db.commit()
     return {
@@ -1133,7 +1134,7 @@ def generate_conversation_report_for_conversation(
         "report": report_payload,
         "transcript_generated": transcript_generated,
         "transcript_segments": len(segments),
-        "provider": "gemini",
+        "provider": report.provider,
         "caveat": "AI-generated findings are estimates for human review. Unknown speaker attribution is not inferred.",
     }
 

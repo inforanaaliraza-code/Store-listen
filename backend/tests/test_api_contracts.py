@@ -363,6 +363,59 @@ def test_gemini_conversation_report_provider_parses_structured_output(monkeypatc
     assert request["json"]["generationConfig"]["responseMimeType"] == "application/json"
 
 
+def test_conversation_report_falls_back_to_groq_when_gemini_fails(monkeypatch) -> None:
+    from app.providers import ai
+
+    monkeypatch.setattr(settings, "ai_provider", "gemini")
+    monkeypatch.setattr(settings, "gemini_api_key", "provider-test-key")
+    monkeypatch.setattr(settings, "groq_api_key", "groq-test-key")
+
+    def fail_gemini(*_args, **_kwargs):
+        raise RuntimeError("Gemini report generation failed with HTTP 400.")
+
+    class Message:
+        content = json.dumps({
+            "summary": "The speaker asked for a charger.",
+            "customer_needs": ["phone charger"],
+            "customer_sentiment": "neutral",
+            "products_discussed": ["charger"],
+            "opportunity_type": "potential",
+            "opportunity_summary": "Ask which phone it is for.",
+            "recommendation": "Confirm the connector.",
+            "evidence": "The speaker asked for a charger.",
+            "confidence": 0.7,
+        })
+
+    class Choice:
+        message = Message()
+
+    class Completion:
+        choices = [Choice()]
+
+    captured = {}
+
+    class Completions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return Completion()
+
+    class Chat:
+        completions = Completions()
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured["client"] = kwargs
+            self.chat = Chat()
+
+    monkeypatch.setattr(ai, "_gemini_generate_json", fail_gemini)
+    monkeypatch.setattr("openai.OpenAI", FakeClient)
+    report = ai.generate_conversation_report([{"role": "unknown", "language": "en", "time_seconds": 0, "text": "I need a charger."}])
+    assert report.provider == "groq"
+    assert report.customer_needs == ["phone charger"]
+    assert captured["model"] == "llama-3.1-8b-instant"
+    assert captured["client"]["api_key"] == "groq-test-key"
+
+
 def test_gemini_provider_remains_compatible_with_live_clip_analysis(monkeypatch) -> None:
     from app.providers import ai
 

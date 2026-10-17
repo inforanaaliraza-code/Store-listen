@@ -160,7 +160,7 @@ export default function ConversationDetailPage() {
     setAnalysisError('');
     setAnalysisMessage('');
     try {
-      const result = await apiPost<AnalysisResult>(`/api/v1/conversations/${id}/report`);
+      const result = await apiPost<AnalysisResult>(`/api/v1/conversations/${id}/report`, undefined, 90_000);
       setConversation((current) => current ? {
         ...current,
         analysis_status: result.analysis_status,
