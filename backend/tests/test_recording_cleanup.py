@@ -1,8 +1,33 @@
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from app.database import SessionLocal
 from app.models import AudioRecording, Conversation, ConversationParticipant, TranscriptSegment
-from app.services.recording_cleanup import delete_recording_entry, delete_recordings_by_ids
+from app.services.recording_cleanup import (
+    delete_recording_entry,
+    delete_recordings_by_ids,
+    wipe_all_conversation_audio,
+)
+
+
+def test_wipe_all_conversation_audio_uses_mongo_compatible_model_query():
+    db = SessionLocal()
+    suffix = uuid4().hex
+    conversation_id = f"conv-wipe-{suffix}"
+    store_id = f"store-wipe-{suffix}"
+    try:
+        db.add(Conversation(id=conversation_id, store_id=store_id, status="ENDED"))
+        db.commit()
+
+        result = wipe_all_conversation_audio(db, store_id=store_id)
+        db.commit()
+
+        assert result["deleted"]["conversations"] == 1
+        assert db.get(Conversation, conversation_id) is None
+    finally:
+        db.query(Conversation).filter(Conversation.id == conversation_id).delete(synchronize_session=False)
+        db.commit()
+        db.close()
 
 
 def test_delete_recordings_by_ids_cascades_conversation(tmp_path, monkeypatch):

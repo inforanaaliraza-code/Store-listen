@@ -81,15 +81,6 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Store Listen API", version="1.0.0", docs_url="/docs", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
-    allow_origin_regex=settings.cors_origin_regex,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["X-Request-ID", "Retry-After"],
-)
 app.include_router(health)
 app.include_router(api)
 
@@ -166,3 +157,14 @@ async def security_and_limits(request: Request, call_next):
         logger.exception("Unhandled error rid=%s", request_id)
         response = JSONResponse({"detail": "Internal error", "request_id": request_id}, status_code=500)
     return _secure_response(response, request_id)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_origin_regex=settings.cors_origin_regex,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Request-ID", "Retry-After"],
+)

@@ -133,7 +133,7 @@ def delete_recordings_by_ids(db, recording_ids: list[str]) -> dict[str, Any]:
 
 def wipe_all_conversation_audio(db, *, store_id: str | None = None) -> dict[str, Any]:
     """Flash-delete every conversation/recording (optionally scoped to one store)."""
-    conversation_query = db.query(Conversation.id)
+    conversation_query = db.query(Conversation)
     recording_query = db.query(AudioRecording)
     if store_id:
         conversation_query = conversation_query.filter(Conversation.store_id == store_id)
