@@ -286,6 +286,20 @@ def check_database_connection() -> None:
                 collection.create_index(keys, unique=True)
 
 
+def migrate_conversation_data_sources() -> None:
+    if mongo_database is None:
+        raise RuntimeError("MONGODB_URI is required to migrate conversation provenance.")
+    conversations = mongo_database["conversations"]
+    conversations.update_many(
+        {"data_source": {"$exists": False}},
+        {"$set": {"data_source": "live"}},
+    )
+    conversations.update_many(
+        {"id": {"$in": ["conv-1001", "conv-1002", "conv-1003", "conv-1004", "conv-1005", "conv-live-demo"]}},
+        {"$set": {"data_source": "demo"}},
+    )
+
+
 def get_db() -> Generator[MongoSession, None, None]:
     db = SessionLocal()
     try:

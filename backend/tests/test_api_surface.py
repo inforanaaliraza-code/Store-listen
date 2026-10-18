@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from app.database import SessionLocal
+from app.database import SessionLocal, migrate_conversation_data_sources
 from app.main import app
 from app.models import AudioRecording, Conversation, ConversationParticipant, DailyReport, Employee, PosTransaction, SalesRecommendation, StockItem, Store, StoreDevice, StoreRule, TranscriptSegment
 from app.providers.speech import MockSpeechProvider
@@ -14,6 +14,19 @@ from app.security import hash_device_secret
 from app.services.audio_storage import delete_audio_clip
 
 client = TestClient(app)
+
+
+def test_legacy_conversation_provenance_migration_preserves_old_captures_as_live():
+    db = SessionLocal()
+    conversation_id = f"conv-legacy-source-{uuid4().hex}"
+    collection = db.database["conversations"]
+    try:
+        collection.insert_one({"id": conversation_id})
+        migrate_conversation_data_sources()
+        assert collection.find_one({"id": conversation_id})["data_source"] == "live"
+    finally:
+        collection.delete_one({"id": conversation_id})
+        db.close()
 
 
 def login(email: str = "admin@storelisten.demo", password: str = "StoreListen!2026") -> dict[str, str]:
@@ -26,7 +39,10 @@ def login(email: str = "admin@storelisten.demo", password: str = "StoreListen!20
     return {"Authorization": f"Bearer {response.json()['token']}"}
 
 
-def test_remaining_authenticated_read_routes():
+def test_remaining_authenticated_read_routes(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "demo_mode", True)
     headers = login()
     assert client.get("/api/v1/auth/me", headers=headers).status_code == 200
     assert client.get("/ready").json()["status"] == "ready"
@@ -48,13 +64,17 @@ def test_remaining_authenticated_read_routes():
     assert client.get("/api/v1/pos/transactions", headers=headers).status_code == 200
     assert client.get("/api/v1/analytics", headers=headers).status_code == 200
     assert client.get("/api/v1/settings", headers=headers).status_code == 200
-    for period in ("daily", "weekly", "monthly"):
+    assert client.get("/api/v1/reports/daily", headers=headers).status_code == 503
+    for period in ("weekly", "monthly"):
         report = client.get(f"/api/v1/reports/{period}", headers=headers)
         assert report.status_code == 200
         assert report.json()["pos_provider"] == "mock"
 
 
-def test_reports_filter_conversations_to_the_selected_period():
+def test_reports_filter_conversations_to_the_selected_period(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "demo_mode", False)
     headers = login()
     baseline_daily = client.get("/api/v1/reports/daily", headers=headers).json()["metrics"]["conversations"]
     baseline_monthly = client.get("/api/v1/reports/monthly", headers=headers).json()["metrics"]["conversations"]
@@ -96,23 +116,39 @@ def test_reports_filter_conversations_to_the_selected_period():
         db.close()
 
 
-def test_daily_report_generation_snapshots_store_pos_revenue():
+def test_daily_report_generation_uses_live_ai_and_excludes_mock_pos(monkeypatch):
+    from app import api as api_module
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "demo_mode", False)
+    monkeypatch.setattr(settings, "ai_provider", "openai")
+    monkeypatch.setattr(settings, "pos_provider", "square")
+    monkeypatch.setattr(api_module, "summarize_daily_report", lambda _report: {
+        "summary": "Live report summary",
+        "findings": ["One live POS transaction was recorded."],
+        "confidence": 0.9,
+        "provider": "openai",
+        "status": "completed",
+    })
     headers = login()
     suffix = uuid4().hex
-    transaction_id = f"txn-report-{suffix}"
+    transaction_ids = [f"txn-report-live-{suffix}", f"txn-report-mock-{suffix}"]
     now = datetime.now(UTC)
     db = SessionLocal()
-    db.add(PosTransaction(
-        id=transaction_id,
-        store_id="store-001",
-        employee_id="employee-001",
-        amount=23.45,
-        currency="USD",
-        occurred_at=now,
-        provider="mock",
-    ))
-    db.commit()
-    db.close()
+    try:
+        db.add_all([
+            PosTransaction(
+                id=transaction_ids[0], store_id="store-001", employee_id="employee-001",
+                amount=23.45, currency="USD", occurred_at=now, provider="square",
+            ),
+            PosTransaction(
+                id=transaction_ids[1], store_id="store-001", employee_id="employee-001",
+                amount=999.99, currency="USD", occurred_at=now, provider="mock",
+            ),
+        ])
+        db.commit()
+    finally:
+        db.close()
 
     generated = client.post(
         "/api/v1/reports/daily/generate",
@@ -122,11 +158,13 @@ def test_daily_report_generation_snapshots_store_pos_revenue():
     assert generated.status_code == 200, generated.text
     body = generated.json()
     assert body["reportStatus"] == "generated"
-    assert body["pos_provider"] == "mock"
-    assert body["daily_analysis"]["provider_summary"]["provider"] == "mock"
+    assert body["dataMode"] == "live"
+    assert body["pos_provider"] == "square"
+    assert body["daily_analysis"]["provider_summary"]["provider"] == "openai"
     assert body["daily_analysis"]["provider_summary"]["status"] == "completed"
-    assert body["metrics"]["sales_count"] >= 1
-    assert body["metrics"]["revenue_by_currency"]["USD"] >= 23.45
+    assert body["metrics"]["sales_data_available"] is True
+    assert body["metrics"]["sales_count"] == 1
+    assert body["metrics"]["revenue_by_currency"]["USD"] == 23.45
     assert body["timezone"] == "America/Chicago"
 
     reloaded = client.get("/api/v1/reports/daily?store_id=store-001", headers=headers)
@@ -138,7 +176,7 @@ def test_daily_report_generation_snapshots_store_pos_revenue():
 
     db = SessionLocal()
     try:
-        db.query(PosTransaction).filter(PosTransaction.id == transaction_id).delete(synchronize_session=False)
+        db.query(PosTransaction).filter(PosTransaction.id.in_(transaction_ids)).delete(synchronize_session=False)
         db.query(DailyReport).filter(DailyReport.id == f"daily-store-001-{body['business_date']}").delete(synchronize_session=False)
         db.commit()
     finally:

@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -17,7 +19,7 @@ def login() -> dict[str, str]:
     return {"Authorization": f"Bearer {response.json()['token']}"}
 
 
-def test_pending_device_requires_admin_approval_before_recording():
+def test_new_and_existing_devices_record_without_admin_approval():
     headers = login()
     store_id = f"store-approval-{uuid4().hex[:10]}"
     db = SessionLocal()
@@ -39,23 +41,26 @@ def test_pending_device_requires_admin_approval_before_recording():
     )
     assert registered.status_code == 200, registered.text
     device_id = registered.json()["device_id"]
+    assert registered.json()["approval_status"] == "approved"
     device_headers = {
         "Authorization": f"Bearer {registered.json()['device_secret']}",
         "X-Device-ID": device_id,
     }
     try:
+        db = SessionLocal()
+        try:
+            device = db.get(StoreDevice, device_id)
+            device.approval_status = "pending"
+            db.commit()
+        finally:
+            db.close()
         pending = client.get("/api/v1/devices/pending", headers=headers)
         assert pending.status_code == 200
-        assert any(item["id"] == device_id for item in pending.json()["devices"])
+        assert all(item["id"] != device_id for item in pending.json()["devices"])
         status = client.get(f"/api/v1/devices/{device_id}/approval", headers=device_headers)
         assert status.status_code == 200
-        assert status.json()["approved"] is False
-        assert status.json()["approval_status"] == "pending"
-        assert client.post("/api/v1/audio/sessions", headers=device_headers, json={"store_id": store_id}).status_code == 403
-
-        approved = client.post(f"/api/v1/devices/{device_id}/approve", headers=headers)
-        assert approved.status_code == 200
-        assert approved.json()["approval_status"] == "approved"
+        assert status.json()["approved"] is True
+        assert status.json()["approval_status"] == "approved"
         started = client.post("/api/v1/audio/sessions", headers=device_headers, json={"store_id": store_id})
         assert started.status_code == 200, started.text
         conversation_id = started.json()["conversation_id"]
@@ -164,13 +169,72 @@ def test_store_listener_daily_report_has_six_kpis_and_sections():
         },
         low_stock_count=2,
         redacted_count=1,
+        interactions=[
+            {"number": 1, "sentiment": "Neutral", "transcript_summary": "Asked about a charger.", "coaching_tip": "Clarify connector type."},
+            {"number": 2, "sentiment": "Positive", "transcript_summary": "Purchased a cable.", "coaching_tip": "Keep it up."},
+        ],
     )
     assert report["brand"] == "STORE LISTENER"
     assert set(report["kpis"]) == {"revenue", "missed", "conversations", "avg_ticket", "low_stock", "redacted"}
     assert report["kpis"]["revenue"]["value"] == "$400"
     assert report["kpis"]["conversations"]["value"] == "4"
+    assert report["kpis"]["missed"]["value"] == "1"
+    assert report["kpis"]["avg_ticket"]["detail"] == "per POS transaction"
     assert report["executive_summary"]
     assert report["key_points"]
-    assert report["sentiment"]["positive"] + report["sentiment"]["neutral"] + report["sentiment"]["negative"] == 100
+    assert report["sentiment"]["sample_size"] == 2
+    assert sum(report["sentiment"][key] for key in ("positive", "neutral", "negative", "mixed")) == 100
+    small_sample = build_store_listener_daily_report(
+        store_name="North Star",
+        store_location="Dallas, TX",
+        report={"metrics": {}, "daily_analysis": {}},
+        interactions=[{"sentiment": "Positive"}, {"sentiment": "Negative"}] + [{"sentiment": "Mixed"}] * 4,
+    )
+    percentages = small_sample["sentiment"]
+    assert percentages["neutral"] >= 0
+    assert sum(percentages[key] for key in ("positive", "neutral", "negative", "mixed")) == 100
+    unavailable_pos = build_store_listener_daily_report(
+        store_name="North Star",
+        store_location="Dallas, TX",
+        report={"metrics": {"sales_data_available": False}, "daily_analysis": {}},
+        interactions=[],
+    )
+    assert unavailable_pos["kpis"]["revenue"]["value"] == "N/A"
+    assert unavailable_pos["kpis"]["avg_ticket"]["value"] == "N/A"
+
+
+def test_interaction_card_uses_saved_analysis_and_store_timezone():
+    conversation = SimpleNamespace(
+        id="conv-report-timezone",
+        started_at=datetime(2026, 10, 6, 17, 0, tzinfo=UTC),
+    )
+    card = build_interaction_cards_from_conversations(
+        [conversation],
+        store_name="North Star",
+        store_location="Dallas, TX",
+        timezone_name="America/Chicago",
+        segments_by_conversation={conversation.id: [SimpleNamespace(
+            translated_text="Asked about a charger.",
+            original_text="Asked about a charger.",
+            end_time=14,
+        )]},
+        opportunities_by_conversation={conversation.id: [SimpleNamespace(status="MISSED")]},
+        reports_by_conversation={conversation.id: {
+            "summary": "The customer asked about a charger.",
+            "customer_sentiment": "negative",
+            "confidence": 0.91,
+            "recommendation": "Confirm the device connector.",
+            "customer_needs": ["charger"],
+            "products_discussed": ["USB-C cable"],
+            "opportunity_type": "missed",
+        }},
+    )[0]
+
+    assert card["time"] == "12:00 PM"
+    assert card["sentiment"] == "Negative"
+    assert card["confidence"] == 0.91
+    assert card["opportunity_type"] == "missed"
+    assert card["coaching_tip"] == "Confirm the device connector."
+    assert "score" not in card
     assert report["actions_for_tomorrow"]
     assert report["interactions"]

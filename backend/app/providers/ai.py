@@ -499,7 +499,11 @@ def get_ai_provider(name: str) -> AIAnalysisProvider:
 
 
 def summarize_daily_report(report: dict) -> dict:
-    provider_name = "mock" if settings.demo_mode else settings.ai_provider
+    if settings.demo_mode:
+        raise RuntimeError("Daily reports require DEMO_MODE=false; mock/demo data is not reportable.")
+    provider_name = settings.ai_provider
+    if provider_name == "mock":
+        raise RuntimeError("Daily reports require a configured real AI provider; AI_PROVIDER=mock is not allowed.")
     provider = get_ai_provider(provider_name)
     result = provider.summarize_day(report)
     return {

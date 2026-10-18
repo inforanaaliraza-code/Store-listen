@@ -1281,11 +1281,12 @@ async def start_audio_session(body: AudioSessionStart, db: Session = Depends(get
     if device is not None and not device_is_approved(device):
         raise HTTPException(
             403,
-            f"This store device is awaiting admin approval ({device_approval_status(device)}). Recording is blocked until approved.",
+            f"Recording is blocked because this device is {device_approval_status(device)} or revoked.",
         )
     conversation = Conversation(
         id=f"conv-{uuid4().hex[:12]}",
         store_id=body.store_id,
+        data_source="live",
         status="LIVE",
         primary_language="und",
         opportunity_status="UNKNOWN",
@@ -1522,6 +1523,7 @@ async def transcribe_audio(
             conversation = Conversation(
                 id=f"conv-{uuid4().hex[:12]}",
                 store_id=store_id,
+                data_source="live",
                 status="LIVE",
                 primary_language=language_hint or "und",
                 opportunity_status="UNKNOWN",
@@ -1955,6 +1957,22 @@ def sales_intelligence(db: Session = Depends(get_db), user: User = Depends(curre
     }
 
 
+def _require_live_daily_report_config() -> None:
+    if settings.demo_mode:
+        raise HTTPException(503, "Daily reports are disabled in demo mode. Set DEMO_MODE=false to use live records.")
+    if settings.ai_provider == "mock":
+        raise HTTPException(503, "Daily reports require a real AI provider. Configure AI_PROVIDER and its API key.")
+
+
+def _is_live_daily_report(payload: dict[str, Any]) -> bool:
+    provider_summary = (payload.get("daily_analysis") or {}).get("provider_summary") or {}
+    return (
+        payload.get("dataMode") == "live"
+        and provider_summary.get("provider") not in {None, "", "mock", "demo"}
+        and provider_summary.get("status") == "completed"
+    )
+
+
 @api.get("/reports/history")
 def report_history(
     store_id: str | None = Query(default=None, max_length=64),
@@ -1962,6 +1980,8 @@ def report_history(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ) -> dict[str, Any]:
+    if settings.demo_mode:
+        return {"reports": []}
     query = apply_store_scope(db.query(DailyReport), DailyReport, user)
     if store_id:
         if not _scoped_record(db, Store, store_id, user):
@@ -1972,20 +1992,21 @@ def report_history(
         store.id: store.name
         for store in apply_store_scope(db.query(Store), Store, user).all()
     }
-    return {
-        "reports": [
-            {
-                "id": row.id,
-                "store_id": row.store_id,
-                "store_name": store_names.get(row.store_id, "All stores"),
-                "business_date": json.loads(row.payload_json).get("business_date"),
-                "generated_at": row.generated_at.isoformat() if row.generated_at else None,
-                "report_status": json.loads(row.payload_json).get("reportStatus", "generated"),
-                "summary": json.loads(row.payload_json).get("daily_analysis", {}).get("provider_summary", {}).get("summary", ""),
-            }
-            for row in rows
-        ]
-    }
+    reports = []
+    for row in rows:
+        payload = json.loads(row.payload_json)
+        if not _is_live_daily_report(payload):
+            continue
+        reports.append({
+            "id": row.id,
+            "store_id": row.store_id,
+            "store_name": store_names.get(row.store_id, "All stores"),
+            "business_date": payload.get("business_date"),
+            "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+            "report_status": payload.get("reportStatus", "generated"),
+            "summary": payload.get("daily_analysis", {}).get("provider_summary", {}).get("summary", ""),
+        })
+    return {"reports": reports}
 
 
 @api.get("/reports/{period}")
@@ -1996,15 +2017,20 @@ def reports(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ) -> dict[str, Any]:
+    if period == "daily" and settings.demo_mode:
+        _require_live_daily_report_config()
     if store_id and not _scoped_record(db, Store, store_id, user):
         raise HTTPException(404, "Store not found")
     report = report_summary(db, user, period, store_id, business_date)
     report_id = f"daily-{store_id}-{report['business_date']}" if period == "daily" and store_id else None
     saved = db.get(DailyReport, report_id) if report_id else None
     if saved:
-        return json.loads(saved.payload_json)
+        saved_payload = json.loads(saved.payload_json)
+        if period != "daily" or _is_live_daily_report(saved_payload):
+            return saved_payload
     return {
         "reportType": period,
+        **({"reportStatus": "not_generated"} if period == "daily" else {}),
         "generatedAt": datetime.now(UTC).isoformat(),
         "pos_provider": settings.pos_provider,
         **report,
@@ -2019,10 +2045,14 @@ def generate_daily_report(
 ) -> dict[str, Any]:
     if user.role not in {"SUPER_ADMIN", "ORG_ADMIN", "STORE_MANAGER", "SUPERVISOR"}:
         raise HTTPException(403, "Daily report generation requires a manager role")
+    _require_live_daily_report_config()
     store = _scoped_record(db, Store, body.store_id, user)
     if not store:
         raise HTTPException(404, "Store not found")
     report = report_summary(db, user, "daily", store.id, body.business_date)
+    metrics = report.get("metrics") or {}
+    if not metrics.get("conversations") and not metrics.get("sales_data_available"):
+        raise HTTPException(409, "No live conversations or real POS transactions are available for this business date.")
     try:
         report["daily_analysis"]["provider_summary"] = summarize_daily_report(report)
     except Exception as exc:
@@ -2046,19 +2076,47 @@ def generate_daily_report(
         ).order_by(TranscriptSegment.start_time.asc()).all():
             segments_by_conversation.setdefault(segment.conversation_id, []).append(segment)
     opportunities_by_conversation: dict[str, list] = {}
+    reports_by_conversation: dict[str, dict[str, Any]] = {}
     if conversation_ids:
+        conversation_analysis_runs = db.query(AiProcessingRun).filter(
+            AiProcessingRun.conversation_id.in_(conversation_ids),
+            AiProcessingRun.status == "completed",
+        ).all()
+        real_analysis_conversation_ids = {
+            run.conversation_id for run in conversation_analysis_runs
+            if str(getattr(run, "provider", "")).casefold() not in {"", "mock", "demo"}
+        }
         for opportunity in db.query(ProductOpportunity).filter(
             ProductOpportunity.conversation_id.in_(conversation_ids)
         ).all():
+            if opportunity.conversation_id not in real_analysis_conversation_ids:
+                continue
             opportunities_by_conversation.setdefault(opportunity.conversation_id, []).append(opportunity)
+        analysis_runs = db.query(AiProcessingRun).filter(
+            AiProcessingRun.conversation_id.in_(conversation_ids),
+            AiProcessingRun.status == "completed",
+            AiProcessingRun.input_excerpt.like("[conversation-report]%"),
+        ).order_by(AiProcessingRun.created_at.desc()).all()
+        for run in analysis_runs:
+            if run.provider in {"mock", "demo"}:
+                continue
+            try:
+                saved = json.loads(run.output_json)
+            except (TypeError, ValueError):
+                continue
+            if saved.get("kind") == "conversation_report" and run.conversation_id not in reports_by_conversation:
+                report_details = saved.get("report")
+                if isinstance(report_details, dict):
+                    reports_by_conversation[run.conversation_id] = report_details
     location = ", ".join(part for part in [getattr(store, "city", None), getattr(store, "region", None)] if part)
     interactions = build_interaction_cards_from_conversations(
         conversation_rows,
         store_name=store.name,
         store_location=location,
+        timezone_name=report.get("timezone", "UTC"),
         segments_by_conversation=segments_by_conversation,
         opportunities_by_conversation=opportunities_by_conversation,
-        reports_by_conversation={},
+        reports_by_conversation=reports_by_conversation,
     )
     store_listener = build_store_listener_daily_report(
         store_name=store.name,
@@ -2066,7 +2124,6 @@ def generate_daily_report(
         report={**report, "generatedAt": generated_at},
         provider_summary=report["daily_analysis"].get("provider_summary"),
         low_stock_count=low_stock,
-        redacted_count=0,
         interactions=interactions,
     )
     payload = {
@@ -2339,35 +2396,14 @@ def settings_view(db: Session = Depends(get_db), user: User = Depends(current_us
 def register_device(body: DeviceRegister, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
     _employee_store_for_write(db, body.store_id, user)
     raw = new_device_secret()
-    previously_approved_device = db.query(StoreDevice).filter(
-        StoreDevice.store_id == body.store_id,
-        StoreDevice.approval_status == "approved",
-        StoreDevice.revoked.is_(False),
-    ).first()
-    prior_approval_audit = db.query(AuditLog).filter(
-        AuditLog.action == "device.approved",
-        AuditLog.entity == "store_device",
-        AuditLog.detail == body.store_id,
-    ).order_by(AuditLog.created_at.asc()).first()
-    store_previously_approved = bool(previously_approved_device or prior_approval_audit)
     device = StoreDevice(
         id=f"device-{uuid4().hex[:8]}",
         store_id=body.store_id,
         name=body.name,
-        status="registered" if store_previously_approved else "pending_approval",
-        approval_status="approved" if store_previously_approved else "pending",
+        status="registered",
+        approval_status="approved",
         audio_source=body.audio_source,
         secret_hash=hash_device_secret(raw),
-        approved_at=(
-            prior_approval_audit.created_at if prior_approval_audit
-            else previously_approved_device.approved_at if previously_approved_device
-            else None
-        ),
-        approved_by=(
-            prior_approval_audit.actor_id if prior_approval_audit
-            else previously_approved_device.approved_by if previously_approved_device
-            else None
-        ),
     )
     db.add(device)
     db.add(AuditLog(
@@ -2376,15 +2412,14 @@ def register_device(body: DeviceRegister, db: Session = Depends(get_db), user: U
         action="device.registered",
         entity="store_device",
         entity_id=device.id,
-        detail=f"{body.store_id};{'approved' if store_previously_approved else 'pending'}",
+        detail=f"{body.store_id};approved",
     ))
     db.commit()
     return {
         "device_id": device.id,
         "device_secret": raw,
         "approval_status": device_approval_status(device),
-        "note": "Store approval already exists; this device can record now." if store_previously_approved
-        else "Device registered and awaiting first approval for this store. Future devices will be approved automatically.",
+        "note": "Device registered and ready to record. No separate admin approval is required.",
     }
 
 

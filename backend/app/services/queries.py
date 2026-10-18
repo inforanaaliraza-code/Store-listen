@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models import (
     Alert,
     AiProcessingRun,
@@ -365,8 +366,22 @@ def report_summary(
         opportunities = opportunities.filter(ProductOpportunity.store_id == store_id)
         sales = sales.filter(PosTransaction.store_id == store_id)
         recordings = recordings.filter(AudioRecording.store_id == store_id)
+    if period == "daily":
+        conversations = conversations.filter(Conversation.data_source == "live")
     conversation_rows = conversations.all()
     conversation_ids = [conversation.id for conversation in conversation_rows]
+    if period == "daily":
+        opportunities = opportunities.filter(ProductOpportunity.conversation_id.in_(conversation_ids))
+        recordings = recordings.filter(AudioRecording.conversation_id.in_(conversation_ids))
+    analysis_run_rows = db.query(AiProcessingRun).filter(AiProcessingRun.conversation_id.in_(conversation_ids)).all()
+    if period == "daily":
+        analysis_run_rows = [
+            run for run in analysis_run_rows
+            if str(getattr(run, "provider", "")).casefold() not in {"", "mock", "demo"}
+        ]
+        analyzed_conversation_ids = {run.conversation_id for run in analysis_run_rows}
+        opportunities = opportunities.filter(ProductOpportunity.conversation_id.in_(analyzed_conversation_ids))
+    analysis_runs = analysis_run_rows
     transcript = db.query(TranscriptSegment).filter(TranscriptSegment.conversation_id.in_(conversation_ids))
 
     total_opportunities = opportunities.count()
@@ -393,10 +408,15 @@ def report_summary(
             "conversion_rate": round(store_converted / store_total, 2) if store_total else 0,
         })
 
+    transactions = [
+        transaction for transaction in sales.all()
+        if str(getattr(transaction, "provider", "")).casefold() not in {"", "mock", "demo"}
+    ]
+    sales_data_available = bool(transactions)
     pos_correlated = db.query(ConversationPosMatch).filter(
-        ConversationPosMatch.conversation_id.in_(conversation_ids)
+        ConversationPosMatch.conversation_id.in_(conversation_ids),
+        ConversationPosMatch.transaction_id.in_([transaction.id for transaction in transactions]),
     ).count()
-    transactions = sales.all()
     revenue_by_currency: dict[str, float] = {}
     for transaction in transactions:
         revenue_by_currency[transaction.currency] = revenue_by_currency.get(transaction.currency, 0) + transaction.amount
@@ -427,22 +447,22 @@ def report_summary(
     attributed_staff = sum(count for speaker, count in speaker_counts.items() if speaker.startswith("speaker-employee-"))
     unattributed = speaker_counts.get("speaker-unknown", 0)
     open_opportunities = opportunities.filter(ProductOpportunity.status.in_(["OPEN", "REVIEW_REQUIRED"])).count()
-    intent_counts = Counter(
-        intent.intent
-        for intent in db.query(CustomerIntent).filter(CustomerIntent.conversation_id.in_(conversation_ids)).all()
-    )
+    intent_rows = db.query(CustomerIntent).filter(CustomerIntent.conversation_id.in_(conversation_ids)).all()
+    if period == "daily":
+        intent_rows = [
+            intent for intent in intent_rows
+            if intent.conversation_id in analyzed_conversation_ids
+            and str(getattr(intent, "source", "")).casefold() not in {"", "mock", "demo"}
+        ]
+    intent_counts = Counter(intent.intent for intent in intent_rows)
     top_intents = [
         {"intent": intent, "count": count}
         for intent, count in intent_counts.most_common(5)
     ]
-    analysis_runs = db.query(AiProcessingRun).filter(AiProcessingRun.conversation_id.in_(conversation_ids))
-    if transactions:
+    if sales_data_available:
         sales_summary = f"{len(transactions)} POS transactions totaling {sum(revenue_by_currency.values()):.2f} were recorded."
     else:
-        sales_summary = (
-            f"No POS transactions were recorded. {open_opportunities} potential opportunities remain open; "
-            "this does not establish why a sale did not occur."
-        )
+        sales_summary = "Live POS sales data is unavailable; no revenue or zero-sales claim can be reported."
     return {
         "range_start": start.isoformat(),
         "range_end": end.isoformat(),
@@ -457,6 +477,7 @@ def report_summary(
             "language_distribution": languages,
             "pos_correlated": pos_correlated,
             "sales_count": len(transactions),
+            "sales_data_available": sales_data_available,
             "revenue_by_currency": {currency: round(amount, 2) for currency, amount in revenue_by_currency.items()},
             "audio_recordings": recordings.count(),
             "recorded_seconds": round(sum(recording.duration_seconds for recording in recordings.all()), 2),
@@ -469,7 +490,7 @@ def report_summary(
                 {"product": product, **counts}
                 for product, counts in sorted(product_mentions.items(), key=lambda item: item[1]["count"], reverse=True)
             ],
-            "ai_analysis_runs": analysis_runs.count(),
+            "ai_analysis_runs": len(analysis_runs),
             "interaction_summary": (
                 f"{attributed_customers} customer-labeled, {attributed_staff} staff-labeled, and "
                 f"{unattributed} unattributed transcript clips. This is not an objective staff-quality score."
@@ -486,7 +507,7 @@ def report_summary(
             "caveat": "Potential signals are not proof of why a sale was or was not made. Speaker labels are operator-selected; unknown clips are not attributed.",
         },
         "caveat": "AI-assisted metrics. Not a determination of employee performance.",
-        "dataMode": "demo",
+        "dataMode": "demo" if settings.demo_mode else "live",
     }
 
 

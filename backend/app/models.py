@@ -38,7 +38,7 @@ class StoreDevice(Base):
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
     name: Mapped[str] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(40), default="disconnected")
-    # pending → approved (admin) before the desktop agent may record/stream.
+    # New registrations are record-ready; explicit rejection or revocation blocks capture.
     approval_status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
     audio_source: Mapped[str] = mapped_column(String(40), default="mock")
     version: Mapped[str] = mapped_column(String(40), default="0.2.0")
@@ -91,6 +91,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
+    data_source: Mapped[str] = mapped_column(String(16), default="live", index=True)
     employee_id: Mapped[str | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="LIVE", index=True)
     primary_language: Mapped[str] = mapped_column(String(8), default="en")

@@ -58,6 +58,7 @@ const state = {
   clockTimer: null,
   reactivationPromise: null,
   captureRetryTimer: null,
+  liveSession: null,
   approvalStatus: 'unknown',
   approvalTimer: null,
   waveformFrame: 0,
@@ -454,9 +455,9 @@ function setApprovalBanner(status) {
   }
   banner.hidden = false;
   if (status === 'rejected') {
-    banner.textContent = 'This device was rejected by an admin. Re-register after they clear the request.';
+    banner.textContent = 'This device was rejected. Register a new device or contact your organization.';
   } else {
-    banner.textContent = 'Waiting for admin approval before this device can start listening.';
+    banner.textContent = 'Waiting to verify this device before capture can start.';
   }
 }
 
@@ -474,8 +475,8 @@ async function refreshApprovalStatus() {
     $('#captureButton').disabled = true;
     $('#captureTitle').textContent = state.approvalStatus === 'rejected' ? 'Approval rejected' : 'Awaiting approval';
     $('#captureMessage').textContent = state.approvalStatus === 'rejected'
-      ? 'Ask an admin to approve this store device, then restart capture.'
-      : 'Recording stays off until an admin approves this store in the web portal.';
+      ? 'Register a new device or contact your organization.'
+      : 'Device status could not be verified. Recording will start when access is available.';
   }
   return state.approvalStatus;
 }
@@ -1244,8 +1245,8 @@ async function startCapture({ fromUser = false } = {}) {
   if (approval !== 'approved') {
     setCaptureUi(false);
     showError($('#captureError'), approval === 'rejected'
-      ? 'This device was rejected. Ask an admin to approve a new registration.'
-      : 'This device is waiting for admin approval. Recording cannot start yet.');
+      ? 'This device was rejected. Register a new device or contact your organization.'
+      : 'Device status could not be verified. Recording cannot start yet.');
     return;
   }
   const starting = startCaptureSession();
@@ -1529,6 +1530,7 @@ $('#transcriptArchiveList').addEventListener('click', async (event) => {
 });
 
 async function initialize() {
+  setManuallyStopped(false);
   try {
     const application = await window.storeListen.getAppConfig();
     state.apiBase = application.apiBase;

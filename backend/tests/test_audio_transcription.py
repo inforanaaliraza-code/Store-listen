@@ -775,9 +775,22 @@ def test_unknown_audio_role_is_not_assigned_to_customer(monkeypatch):
     finished = client.post(f"/api/v1/audio/sessions/{conversation_id}/finish", headers=headers)
     assert finished.status_code == 200
     assert finished.json()["status"] == "ENDED"
+    monkeypatch.setattr(settings, "demo_mode", False)
+    monkeypatch.setattr(settings, "ai_provider", "openai")
+    monkeypatch.setattr(settings, "pos_provider", "square")
+    monkeypatch.setattr(api_module, "summarize_daily_report", lambda _report: {
+        "summary": "One live conversation was captured.",
+        "findings": ["A live transcript is available for review."],
+        "confidence": 0.9,
+        "provider": "openai",
+        "status": "completed",
+    })
     daily_report = client.post("/api/v1/reports/daily/generate", headers=headers, json={"store_id": "store-001"})
     assert daily_report.status_code == 200, daily_report.text
     report_payload = daily_report.json()
+    assert report_payload["dataMode"] == "live"
+    assert report_payload["metrics"]["sales_data_available"] is False
+    assert report_payload["store_listener"]["kpis"]["revenue"]["value"] == "N/A"
     charger_signal = next(
         mention for mention in report_payload["daily_analysis"]["potential_product_mentions"]
         if mention["product"] == "phone charger"

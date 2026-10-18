@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-def _money(amount: float) -> str:
-    return f"${amount:,.0f}" if abs(amount - round(amount)) < 0.01 else f"${amount:,.2f}"
+def _money(amount: float, currency: str = "USD") -> str:
+    symbol = {"USD": "$", "CAD": "CA$", "EUR": "€", "GBP": "£"}.get(currency, f"{currency} ")
+    return f"{symbol}{amount:,.0f}" if abs(amount - round(amount)) < 0.01 else f"{symbol}{amount:,.2f}"
 
 
 def build_store_listener_daily_report(
@@ -17,7 +20,7 @@ def build_store_listener_daily_report(
     report: dict[str, Any],
     provider_summary: dict[str, Any] | None = None,
     low_stock_count: int = 0,
-    redacted_count: int = 0,
+    redacted_count: int | None = None,
     interactions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     metrics = report.get("metrics") or {}
@@ -26,11 +29,12 @@ def build_store_listener_daily_report(
 
     revenue_map = metrics.get("revenue_by_currency") or {}
     revenue = float(sum(revenue_map.values())) if revenue_map else 0.0
+    sales_data_available = bool(metrics.get("sales_data_available", True))
+    currency = next(iter(revenue_map), "USD") if len(revenue_map) <= 1 else None
+    revenue_value = "N/A" if not sales_data_available else _money(revenue, currency) if currency else "Multiple currencies"
     sales_count = int(metrics.get("sales_count") or 0)
     conversations = int(metrics.get("conversations") or 0)
     missed_ops = int(metrics.get("potential_missed_opportunities") or 0)
-    # Spec MISSED card is potential revenue; estimate $25 per missed opportunity when unknown.
-    missed_revenue = float(missed_ops * 25)
     avg_ticket = round(revenue / sales_count, 2) if sales_count else 0.0
 
     findings = list(provider.get("findings") or [])
@@ -45,48 +49,44 @@ def build_store_listener_daily_report(
             findings.append(f"Most discussed product signal: {top.get('product')} ({top.get('count')} mentions).")
 
     summary_text = provider.get("summary") or (
-        f"{conversations} customers were attended today with {_money(revenue)} in recorded sales. "
+        f"{conversations} recorded interactions had {revenue_value} in POS sales. "
         f"{missed_ops} potential opportunities remain open for manager review."
     )
     headline = (
-        f"Active day, {_money(revenue)} in sales, {conversations} conversations"
+        f"Active day, {revenue_value} in sales, {conversations} conversations"
         if conversations or revenue
         else "Quiet day — limited conversation and sales activity recorded"
     )
 
-    # Sentiment distribution — derive lightly from opportunity outcomes when AI sentiment is absent.
-    converted = int(metrics.get("converted_opportunities") or 0)
-    open_ops = int(analysis.get("potential_unconverted_opportunities") or 0)
-    total_sent = max(converted + missed_ops + open_ops, 1)
-    sentiment = {
-        "positive": round(100 * converted / total_sent),
-        "neutral": round(100 * open_ops / total_sent),
-        "negative": round(100 * missed_ops / total_sent),
-    }
-    # Normalize to 100
-    drift = 100 - sum(sentiment.values())
-    sentiment["neutral"] = max(0, sentiment["neutral"] + drift)
+    sentiment_counts = Counter(
+        str(item.get("sentiment", "")).casefold()
+        for item in interactions or []
+        if str(item.get("sentiment", "")).casefold() in {"positive", "neutral", "negative", "mixed"}
+    )
+    sentiment_sample_size = sum(sentiment_counts.values())
+    sentiment = {key: 0 for key in ("positive", "neutral", "negative", "mixed")}
+    if sentiment_sample_size:
+        remainders = {}
+        for key in sentiment:
+            sentiment[key], remainders[key] = divmod(sentiment_counts[key] * 100, sentiment_sample_size)
+        undistributed = 100 - sum(sentiment.values())
+        for key in sorted(remainders, key=remainders.get, reverse=True)[:undistributed]:
+            sentiment[key] += 1
+    sentiment["sample_size"] = sentiment_sample_size
 
-    actions = findings[:5] if findings else [
-        "Review open opportunities with floor staff at open.",
-        "Confirm microphone placement before peak hours.",
-        "Follow up on any conversations without clear product resolution.",
-    ]
+    actions = []
+    if missed_ops:
+        actions.append(f"Review {missed_ops} potential opportunity signal(s) with a manager before assigning follow-up.")
+    if low_stock_count:
+        actions.append(f"Check {low_stock_count} below-par inventory item(s) and confirm replenishment needs.")
+    if not int(metrics.get("transcript_segments") or 0) and conversations:
+        actions.append("Check microphone placement and capture health; no transcript segments were recorded.")
+    if not sales_data_available:
+        actions.append("Connect a live POS feed before drawing conclusions about sales or revenue.")
+    if not actions:
+        actions.append("Review the conversation summaries and assign any customer follow-up that is still needed.")
 
-    interaction_cards = interactions or []
-    if not interaction_cards:
-        # Fallback skeleton from product mentions / intents when per-conversation AI tips are unavailable.
-        for index, intent in enumerate((analysis.get("top_intents") or [])[:8], start=1):
-            interaction_cards.append({
-                "number": index,
-                "time": report.get("business_date"),
-                "location": store_location or store_name,
-                "duration_seconds": 0,
-                "sentiment": "Neutral",
-                "score": 70,
-                "transcript_summary": f"Intent signal: {intent.get('intent')} ({intent.get('count')} mentions).",
-                "coaching_tip": "Confirm customer need early and offer one clear next-step product option.",
-            })
+    interaction_cards = interactions if interactions is not None else []
 
     generated_at = report.get("generatedAt") or datetime.now(UTC).isoformat()
     return {
@@ -97,12 +97,24 @@ def build_store_listener_daily_report(
         "store_location": store_location,
         "generated_at": generated_at,
         "kpis": {
-            "revenue": {"label": "REVENUE", "value": _money(revenue), "detail": f"{sales_count} item(s) sold"},
-            "missed": {"label": "MISSED", "value": _money(missed_revenue), "detail": "potential revenue"},
-            "conversations": {"label": "CONVERSATIONS", "value": str(conversations), "detail": "customers attended"},
-            "avg_ticket": {"label": "AVG TICKET", "value": _money(avg_ticket), "detail": "per sale"},
+            "revenue": {
+                "label": "REVENUE",
+                "value": revenue_value,
+                "detail": f"{sales_count} POS transaction(s)" if sales_data_available else "live POS data unavailable",
+            },
+            "missed": {"label": "MISSED", "value": str(missed_ops), "detail": "potential opportunities; value not estimated"},
+            "conversations": {"label": "CONVERSATIONS", "value": str(conversations), "detail": "recorded interactions"},
+            "avg_ticket": {
+                "label": "AVG TICKET",
+                "value": _money(avg_ticket, currency) if sales_count and sales_data_available and currency else "N/A" if not sales_data_available or not sales_count else "Multiple currencies",
+                "detail": "per POS transaction" if sales_count and sales_data_available else "live POS data unavailable" if not sales_data_available else "no POS transactions",
+            },
             "low_stock": {"label": "LOW STOCK", "value": str(low_stock_count), "detail": "items below par"},
-            "redacted": {"label": "REDACTED", "value": str(redacted_count), "detail": "sensitive details removed"},
+            "redacted": {
+                "label": "REDACTED",
+                "value": str(redacted_count) if redacted_count is not None else "N/A",
+                "detail": "sensitive details removed" if redacted_count is not None else "not tracked in this report",
+            },
         },
         "executive_summary": summary_text,
         "key_points": findings[:8],
@@ -117,6 +129,7 @@ def build_interaction_cards_from_conversations(
     *,
     store_name: str,
     store_location: str,
+    timezone_name: str = "UTC",
     segments_by_conversation: dict[str, list[Any]],
     opportunities_by_conversation: dict[str, list[Any]],
     reports_by_conversation: dict[str, dict[str, Any]],
@@ -129,35 +142,49 @@ def build_interaction_cards_from_conversations(
             text = (segment.translated_text or segment.original_text or "").strip()
             if text:
                 english_bits.append(text)
-        summary = " ".join(english_bits)[:280] or "No clear speech was captured for this interaction."
-        opp = opportunities_by_conversation.get(conversation.id) or []
-        missed = any(getattr(item, "status", "") == "MISSED" for item in opp)
-        converted = any(getattr(item, "status", "") == "CONVERTED" for item in opp)
-        sentiment = "Negative" if missed else "Positive" if converted else "Neutral"
-        score = 55 if missed else 88 if converted else 72
+        transcript_summary = " ".join(english_bits)[:280] or "No clear speech was captured for this interaction."
+        opportunity_statuses = {
+            str(getattr(item, "status", "")).upper()
+            for item in opportunities_by_conversation.get(conversation.id, [])
+        }
         ai = reports_by_conversation.get(conversation.id) or {}
-        coaching = (
-            ai.get("coaching_tip")
-            or ai.get("recommendation")
-            or (
-                "Revisit the missed product ask before closing the conversation."
-                if missed
-                else "Keep confirming the customer's need and offer one clear next step."
-            )
-        )
+        sentiment = str(ai.get("customer_sentiment") or "Not analyzed").title()
+        opportunity_type = ai.get("opportunity_type")
+        if not opportunity_type:
+            if "MISSED" in opportunity_statuses:
+                opportunity_type = "missed"
+            elif "CONVERTED" in opportunity_statuses:
+                opportunity_type = "converted"
+            elif opportunity_statuses & {"OPEN", "REVIEW_REQUIRED"}:
+                opportunity_type = "potential"
+        confidence = ai.get("confidence")
+        try:
+            confidence = max(0.0, min(1.0, float(confidence))) if confidence is not None else None
+        except (TypeError, ValueError):
+            confidence = None
         started = getattr(conversation, "started_at", None)
         duration = 0.0
         if segments:
             duration = max((getattr(segment, "end_time", 0) or 0) for segment in segments)
+        if started and started.tzinfo is None:
+            started = started.replace(tzinfo=UTC)
+        try:
+            store_timezone = ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            store_timezone = ZoneInfo("UTC")
+        local_started = started.astimezone(store_timezone) if started else None
         cards.append({
             "number": index,
-            "time": started.astimezone(UTC).strftime("%I:%M %p") if started else "",
+            "time": local_started.strftime("%I:%M %p") if local_started else "",
             "location": store_location or store_name,
             "duration_seconds": round(float(duration), 1),
             "sentiment": sentiment,
-            "score": score,
-            "transcript_summary": summary,
-            "coaching_tip": coaching,
+            "confidence": confidence,
+            "transcript_summary": str(ai.get("summary") or transcript_summary)[:500],
+            "coaching_tip": str(ai.get("recommendation") or "No conversation coaching analysis is available."),
+            "customer_needs": ai.get("customer_needs") if isinstance(ai.get("customer_needs"), list) else [],
+            "products_discussed": ai.get("products_discussed") if isinstance(ai.get("products_discussed"), list) else [],
+            "opportunity_type": opportunity_type,
             "conversation_id": conversation.id,
         })
     return cards

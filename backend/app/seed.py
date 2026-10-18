@@ -143,6 +143,7 @@ def seed_if_empty(db: Session) -> None:
         Conversation(
             id="conv-1001",
             store_id="store-001",
+            data_source="demo",
             employee_id="employee-001",
             status="ENDED",
             primary_language="es",
@@ -155,6 +156,7 @@ def seed_if_empty(db: Session) -> None:
         Conversation(
             id="conv-1002",
             store_id="store-001",
+            data_source="demo",
             employee_id="employee-002",
             status="ENDED",
             primary_language="en",
@@ -167,6 +169,7 @@ def seed_if_empty(db: Session) -> None:
         Conversation(
             id="conv-1003",
             store_id="store-002",
+            data_source="demo",
             employee_id="employee-003",
             status="ENDED",
             primary_language="en",
@@ -179,6 +182,7 @@ def seed_if_empty(db: Session) -> None:
         Conversation(
             id="conv-1004",
             store_id="store-001",
+            data_source="demo",
             employee_id="employee-001",
             status="ENDED",
             primary_language="en",
@@ -191,6 +195,7 @@ def seed_if_empty(db: Session) -> None:
         Conversation(
             id="conv-1005",
             store_id="store-003",
+            data_source="demo",
             employee_id="employee-004",
             status="ENDED",
             primary_language="es",

@@ -11,8 +11,10 @@ def device_approval_status(device: StoreDevice | None) -> str:
     if device.revoked:
         return "rejected"
     value = getattr(device, "approval_status", None)
-    if value in {"pending", "approved", "rejected"}:
-        return value
+    if value == "rejected":
+        return "rejected"
+    if value in {"pending", "approved"}:
+        return "approved"
     # Legacy devices created before the approval gate.
     return "approved"
 

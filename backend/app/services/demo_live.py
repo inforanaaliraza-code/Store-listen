@@ -53,6 +53,7 @@ async def run_live_demo(store_id: str = "store-001") -> str:
         conversation = Conversation(
             id=LIVE_CONVERSATION_ID,
             store_id=store_id,
+            data_source="demo",
             employee_id="employee-001",
             status="LIVE",
             primary_language="es",

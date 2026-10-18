@@ -16,7 +16,7 @@ import asyncio
 
 from app.api import api, health
 from app.config import settings
-from app.database import SessionLocal, check_database_connection
+from app.database import SessionLocal, check_database_connection, migrate_conversation_data_sources
 from app.providers.speech import WhisperSpeechProvider, get_speech_provider, resolve_speech_provider_name
 from app.seed import seed_if_empty
 from app.services.audio_storage import cleanup_expired_audio
@@ -30,6 +30,7 @@ async def _bootstrap_background() -> None:
     """Heavy startup work after /health is already serving (Render 5s health window)."""
     try:
         await asyncio.to_thread(check_database_connection)
+        await asyncio.to_thread(migrate_conversation_data_sources)
         def _seed_and_cleanup() -> None:
             with SessionLocal() as db:
                 if settings.demo_mode:

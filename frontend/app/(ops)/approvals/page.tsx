@@ -69,7 +69,7 @@ export default function StoreApprovalsPage() {
         <div>
           <span className="eyebrow">STORE APPROVALS</span>
           <h1 className="serif">Pending store requests</h1>
-          <p>Review new desktop device registrations. Recording stays blocked until you approve.</p>
+          <p>New desktop devices are ready to record after secure registration. Rejected devices remain blocked.</p>
         </div>
         <button className="ghost owner-button" type="button" onClick={() => void load()} disabled={loading}>Refresh</button>
       </div>
@@ -116,7 +116,7 @@ export default function StoreApprovalsPage() {
             </tbody>
           </table>
         ) : !loading ? (
-          <div className="empty"><strong>No pending store requests</strong><p>New desktop registrations appear here for admin approval before recording can start.</p></div>
+          <div className="empty"><strong>No pending store requests</strong><p>New desktop devices can record as soon as setup is complete.</p></div>
         ) : null}
       </section>
     </div>
