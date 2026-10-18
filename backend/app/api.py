@@ -2057,7 +2057,19 @@ def generate_daily_report(
         report["daily_analysis"]["provider_summary"] = summarize_daily_report(report)
     except Exception as exc:
         logger.exception("Daily report AI summary failed store_id=%s", store.id)
-        raise HTTPException(503, "The configured AI provider is unavailable; the report was not saved with a fabricated fallback.") from exc
+        message = str(exc)
+        safe_provider_errors = (
+            "GEMINI_API_KEY is missing.",
+            "Set AI_PROVIDER=gemini to enable Gemini analysis.",
+            "Gemini report generation failed with HTTP ",
+            "Gemini report service could not be reached.",
+            "Gemini returned an empty analysis",
+            "Gemini returned invalid structured JSON.",
+        )
+        detail = message if isinstance(exc, RuntimeError) and message.startswith(safe_provider_errors) else (
+            "The configured AI provider is unavailable; the report was not saved with a fabricated fallback."
+        )
+        raise HTTPException(503, detail) from exc
     generated_at = datetime.now(UTC).isoformat()
     low_stock = db.query(StockItem).filter(
         StockItem.store_id == store.id,
