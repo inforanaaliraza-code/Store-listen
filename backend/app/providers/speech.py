@@ -9,12 +9,12 @@ from pathlib import Path
 
 from app.config import settings
 from app.providers.speech_quality import (
-    SUPPORTED_LANGUAGES,
     filter_whisper_segments,
+    detect_transcript_language,
     is_hallucinated_transcript,
     is_usable_english_translation,
     looks_like_spanish,
-    normalize_language,
+    normalize_detected_language,
     polish_spanish_translation,
     sanitize_transcript,
 )
@@ -50,11 +50,11 @@ class NoSpeechDetected(ValueError):
 class UnsupportedLanguageDetected(ValueError):
     def __init__(self, language: str):
         self.language = language
-        super().__init__(f"Only English and Spanish speech is supported; detected {language}.")
+        super().__init__(f"Could not determine a supported language code; detected {language}.")
 
 
 def normalize_supported_language(language: str | None) -> str | None:
-    return normalize_language(language)
+    return normalize_detected_language(language)
 
 
 GROQ_OPENAI_BASE_URL = "https://api.groq.com/openai/v1"
@@ -117,20 +117,9 @@ def resolve_speech_provider_name(requested: str | None = None) -> str:
 
 def _finalize_transcript(original: str, language: str | None, hint: str | None) -> tuple[str, str]:
     text = sanitize_transcript(original)
-    if not text or is_hallucinated_transcript(text):
-        raise NoSpeechDetected("No clear English or Spanish speech was detected in this audio clip.")
-
-    # Short clear Spanish store phrases win over a wrong Whisper language tag (e.g. Gracias→en).
-    if looks_like_spanish(text):
-        return text, "es"
-
-    raw = (language or "").lower().replace("_", "-").split("-")[0] if language else None
-    if raw and raw not in SUPPORTED_LANGUAGES and raw not in {"und", "auto", ""}:
-        raise UnsupportedLanguageDetected(raw)
-
-    detected = normalize_supported_language(language) or hint or "en"
-    if detected not in SUPPORTED_LANGUAGES:
-        raise UnsupportedLanguageDetected(detected)
+    detected = detect_transcript_language(text, language, hint)
+    if not text or is_hallucinated_transcript(text, detected):
+        raise NoSpeechDetected("No clear speech was detected in this audio clip.")
     return text, detected
 
 
@@ -201,7 +190,7 @@ class WhisperSpeechProvider(SpeechProvider):
     @staticmethod
     def _transcribe_kwargs(language_hint: str | None) -> dict:
         kwargs = {
-            "language": normalize_supported_language(language_hint),
+            "language": normalize_detected_language(language_hint),
             "beam_size": settings.whisper_beam_size,
             "best_of": 1,
             "temperature": 0.0,
@@ -231,7 +220,7 @@ class WhisperSpeechProvider(SpeechProvider):
             except FileNotFoundError:
                 pass
 
-    def transcribe_file(self, audio_path: str | Path, language_hint: str | None = None) -> SpeechResult:
+    def transcribe_file(self, audio_path: str | Path, language_hint: str | None = None, *, fast: bool = False) -> SpeechResult:
         if language_hint and not normalize_supported_language(language_hint):
             raise UnsupportedLanguageDetected(language_hint)
         model = self._get_model()
@@ -242,23 +231,21 @@ class WhisperSpeechProvider(SpeechProvider):
         confidence = sum(segment.avg_logprob for segment in segment_list) / max(len(segment_list), 1)
         confidence = max(0.0, min(1.0, 2.71828**confidence))
         translated = original
-        if settings.whisper_translate_spanish and (language == "es" or looks_like_spanish(original)):
-            language = "es"
+        if not fast and language != "en":
             translations, _ = model.transcribe(
                 str(audio_path),
                 task="translate",
-                **{**self._transcribe_kwargs("en"), "language": "en"},
+                **self._transcribe_kwargs(language),
             )
-            polished = polish_spanish_translation(
-                original,
-                sanitize_transcript(" ".join(segment.text.strip() for segment in translations)),
-            )
-            translated = polished if is_usable_english_translation(original, polished) else ""
+            translated_text = sanitize_transcript(filter_whisper_segments(translations) or "")
+            if language == "es":
+                translated_text = polish_spanish_translation(original, translated_text)
+            translated = translated_text if is_usable_english_translation(original, translated_text, language) else ""
         return SpeechResult(original, language, translated, confidence, True, "spk-unassigned")
 
 
 class CloudSpeechProvider(SpeechProvider):
-    """Cloud transcription via Groq (free) or OpenAI — EN/ES only with Spanish→English."""
+    """Cloud transcription with English display translations for non-English speech."""
 
     name = "cloud"
 
@@ -299,42 +286,45 @@ class CloudSpeechProvider(SpeechProvider):
                 kwargs["response_format"] = "verbose_json"
             else:
                 kwargs["response_format"] = "json"
-            if language in {"en", "es"}:
+            if language:
                 kwargs["language"] = language
             try:
                 result = client.audio.transcriptions.create(**kwargs)
             except Exception:
                 audio_file.seek(0)
                 bare = {"model": model, "file": (filename, audio_file), "temperature": 0}
-                if language in {"en", "es"}:
+                if language:
                     bare["language"] = language
                 result = client.audio.transcriptions.create(**bare)
         text = sanitize_transcript(getattr(result, "text", None) or "")
         segments = getattr(result, "segments", None)
-        if segments is None and isinstance(result, dict):
-            segments = result.get("segments")
+        if isinstance(result, dict):
+            text = sanitize_transcript(result.get("text") or "")
+            segments = result.get("segments") if segments is None else segments
         spoken = filter_whisper_segments(segments)
         rejected_as_noise = False
         if spoken is not None:
             # Whisper itself marked these segments as silence/noise: never show them as speech.
             rejected_as_noise = bool(text) and not spoken.strip()
             text = sanitize_transcript(spoken)
-        detected = normalize_supported_language(getattr(result, "language", None) or language)
+        detected = normalize_detected_language(
+            (result.get("language") if isinstance(result, dict) else getattr(result, "language", None)) or language
+        )
         return text, detected, rejected_as_noise
 
-    def _chat_translate_spanish(self, client, config: dict[str, str], spanish_text: str) -> str:
+    def _chat_translate_to_english(self, client, config: dict[str, str], source_text: str, source_language: str) -> str:
         from app.providers.groq_chat import groq_chat_completion
 
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "Translate the customer's Spanish retail-store speech into clear, concise English "
-                    "for store staff who do not speak Spanish. "
-                    "Return only the English translation, no quotes or commentary."
+                    f"Translate the customer's speech in language {source_language} into clear, concise English "
+                    "for store staff. Preserve names, prices, product details, and intent. "
+                    "Return only the English translation, no source-language text, quotes, or commentary."
                 ),
             },
-            {"role": "user", "content": spanish_text},
+            {"role": "user", "content": source_text},
         ]
         if config["label"] == "groq":
             completion = groq_chat_completion(client, messages=messages)
@@ -342,12 +332,12 @@ class CloudSpeechProvider(SpeechProvider):
             completion = client.chat.completions.create(model="gpt-4o-mini", temperature=0, messages=messages)
         return sanitize_transcript(completion.choices[0].message.content or "")
 
-    def _translate_to_english(self, client, config: dict[str, str], path: Path, spanish_text: str) -> str:
+    def _translate_to_english(self, client, config: dict[str, str], path: Path, source_text: str, source_language: str) -> str:
         """Translate the transcript text. A second Whisper pass hears the clip differently and slows the line."""
         del path
         try:
-            translated = self._chat_translate_spanish(client, config, spanish_text)
-            if is_usable_english_translation(spanish_text, translated):
+            translated = self._chat_translate_to_english(client, config, source_text, source_language)
+            if is_usable_english_translation(source_text, translated, source_language):
                 return translated
         except Exception:
             logger.warning("Text translation fallback failed", exc_info=True)
@@ -370,7 +360,7 @@ class CloudSpeechProvider(SpeechProvider):
         model = config["model"]
         if fast and config["label"] == "groq":
             model = "whisper-large-v3-turbo"
-        hint = normalize_supported_language(language_hint)
+        hint = normalize_detected_language(language_hint)
         path = Path(audio_path)
 
         # Auto-detect first unless the operator forced EN/ES.
@@ -385,30 +375,16 @@ class CloudSpeechProvider(SpeechProvider):
         original, language = _finalize_transcript(original, detected, hint)
         translated = original
         # Live previews skip EN gloss so words appear immediately; finals still translate Spanish.
-        if (
-            not fast
-            and settings.whisper_translate_spanish
-            and (language == "es" or looks_like_spanish(original))
-        ):
-            language = "es"
-            polished = polish_spanish_translation(
-                original,
-                self._translate_to_english(client, config, path, original),
-            )
-            if polished:
-                translated = polished
-            else:
-                # Last-resort chat pass if audio translate echoed Spanish or returned junk.
+        if not fast and language != "en":
+            translated = self._translate_to_english(client, config, path, original, language)
+            if not translated:
                 try:
-                    retry = polish_spanish_translation(
-                        original,
-                        self._chat_translate_spanish(client, config, original),
-                    )
-                    translated = retry or ""
+                    translated = self._chat_translate_to_english(client, config, original, language)
                 except Exception:
                     translated = ""
-            # Never leave Spanish in the English field — staff must see EN or an empty pending line.
-            if not is_usable_english_translation(original, translated):
+            if language == "es" and translated:
+                translated = polish_spanish_translation(original, translated)
+            if not is_usable_english_translation(original, translated, language):
                 translated = ""
 
         self.name = config["label"] or "cloud"
@@ -418,7 +394,7 @@ class CloudSpeechProvider(SpeechProvider):
             model,
             language,
             len(original),
-            language == "es" and translated != original,
+            language != "en" and translated != original,
             fast,
         )
         return SpeechResult(original, language, translated, 0.92, True, "spk-unassigned")

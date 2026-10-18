@@ -15,6 +15,7 @@ type LiveEvent = {
   language?: string;
   originalText?: string;
   translatedText?: string;
+  englishText?: string;
   confidence?: number;
   status?: string;
   label?: string;
@@ -102,27 +103,18 @@ function looksLikeSpanishText(text: string) {
   return hits.some((token) => lowered.includes(token));
 }
 
-function lineEnglish(line: Line) {
-  const spanish = line.language === 'es' || looksLikeSpanishText(line.original);
-  if (!spanish) return line.original;
-  if (line.translated && line.translated !== line.original && !looksLikeSpanishText(line.translated)) {
-    return line.translated;
-  }
-  return '';
-}
-
 function paragraphSpoken(lines: Line[]) {
   return lines.map((line) => line.original).join(' ').trim();
 }
 
-function paragraphEnglish(lines: Line[]) {
-  const hasSpanish = lines.some((line) => line.language === 'es' || looksLikeSpanishText(line.original));
-  if (!hasSpanish) return '';
-  return lines.map((line) => {
-    const spanish = line.language === 'es' || looksLikeSpanishText(line.original);
-    if (!spanish) return line.original;
-    return lineEnglish(line);
-  }).filter(Boolean).join(' ').trim();
+function englishTranscriptText(original: string, englishText: string | null | undefined, language: string) {
+  const source = original.trim();
+  if (language.toLowerCase().split('-')[0] === 'en') return source;
+  const english = englishText?.trim() || '';
+  if (english && english !== source) {
+    return english;
+  }
+  return 'English translation unavailable';
 }
 
 function storeLocation(store?: Store | null) {
@@ -165,7 +157,7 @@ export default function LivePage() {
   }, []);
 
   const loadTranscript = useCallback(async (storeId: string, conversationId: string, startedAtIso: string) => {
-    const transcript = await apiGet<{ segments: { id: string; speaker_label: string; language: string; original_text: string; translated_text: string | null; confidence: number; start_time: number }[] }>(
+    const transcript = await apiGet<{ segments: { id: string; speaker_label: string; language: string; original_text: string; translated_text: string | null; english_text?: string; confidence: number; start_time: number }[] }>(
       `/api/v1/conversations/${encodeURIComponent(conversationId)}/transcript?page_size=500`,
     );
     const recovered = transcript.segments
@@ -175,9 +167,9 @@ export default function LivePage() {
         speaker: segment.speaker_label === 'Speaker not identified' || segment.speaker_label === 'Unattributed speaker'
           ? 'Speaker'
           : (segment.speaker_label || 'Speaker'),
-        language: segment.language,
-        original: segment.original_text,
-        translated: segment.translated_text || '',
+        original: englishTranscriptText(segment.original_text, segment.english_text, segment.language),
+        translated: '',
+        language: 'en',
         confidence: segment.confidence,
         final: true,
         at: Date.parse(startedAtIso) + segment.start_time * 1000,
@@ -341,9 +333,9 @@ export default function LivePage() {
         id: segmentId,
         conversationId: event.conversationId || '',
         speaker: event.speakerLabel || event.speakerId || 'Speaker',
-        language: event.language || 'en',
-        original: event.originalText || '',
-        translated: event.translatedText || '',
+        language: 'en',
+        original: englishTranscriptText(event.originalText || '', event.englishText, event.language || 'en'),
+        translated: '',
         confidence: event.confidence || 0,
         final: true,
         at: Date.parse(event.timestamp || '') || Date.now(),
@@ -364,7 +356,15 @@ export default function LivePage() {
         return { ...current, [storeId]: { ...existing, partial: event.label || 'Voice detected', status: 'LIVE' } };
       }
       if (event.event === 'transcript.partial') {
-        return { ...current, [storeId]: { ...existing, partial: event.originalText || '', status: 'LIVE', conversationId: event.conversationId || existing.conversationId } };
+        const original = event.originalText || '';
+        const language = event.language?.toLowerCase().split('-')[0] || 'en';
+        const english = event.englishText?.trim() || '';
+        const partial = language === 'en'
+          ? original
+          : english && english !== original
+            ? english
+            : 'Translating conversation to English…';
+        return { ...current, [storeId]: { ...existing, partial, status: 'LIVE', conversationId: event.conversationId || existing.conversationId } };
       }
       if (!line) return current;
       return {
@@ -584,8 +584,6 @@ export default function LivePage() {
                   <div className="monitor-conversation-paragraphs">
                     {groupLinesIntoParagraphs(card.lines).map((paragraph, index) => {
                       const spoken = paragraphSpoken(paragraph.lines);
-                      const english = paragraphEnglish(paragraph.lines);
-                      const hasSpanish = paragraph.lines.some((line) => line.language === 'es' || looksLikeSpanishText(line.original));
                       return (
                         <article key={`${paragraph.startedAt}-${index}`} className="monitor-paragraph">
                           <header className="monitor-paragraph-meta">
@@ -593,9 +591,6 @@ export default function LivePage() {
                             <time>{formatParagraphTime(paragraph.startedAt)}</time>
                           </header>
                           <p className="monitor-paragraph-body">{spoken || 'No speech detected.'}</p>
-                          {hasSpanish ? (
-                            <p className="monitor-paragraph-en"><span className="monitor-en-tag">EN</span> {english || 'Translation unavailable'}</p>
-                          ) : null}
                         </article>
                       );
                     })}

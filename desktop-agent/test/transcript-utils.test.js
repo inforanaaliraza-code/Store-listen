@@ -37,9 +37,8 @@ test('groups speech into paragraphs after a conversational pause', () => {
   assert.equal(paragraphs.length, 2);
   assert.equal(paragraphs[0].entries.length, 2);
   assert.equal(paragraphs[1].entries.length, 1);
-  assert.match(formatParagraphPlain(paragraphs[0].entries), /Hello Gracias/);
-  assert.match(formatParagraphPlain(paragraphs[0].entries), /EN: Thank you/);
-  assert.doesNotMatch(formatParagraphPlain(paragraphs[0].entries), /EN: Hello Thank you/);
+  assert.equal(formatParagraphPlain(paragraphs[0].entries), 'Hello Thank you');
+  assert.doesNotMatch(formatParagraphPlain(paragraphs[0].entries), /Gracias|EN:/);
 });
 
 test('English speech does not get an EN translation line even if it contains gracias', () => {
@@ -93,11 +92,11 @@ test('PDF HTML escapes transcript and metadata while retaining translation gloss
       time: '12:00 PM',
       language: 'es',
       originalText: '<img src=x onerror=alert(1)>',
-      translatedText: 'Safe & translated',
+      translatedText: 'I translated it safely',
       segment: {
         language: 'es',
         originalText: '<img src=x onerror=alert(1)>',
-        translatedText: 'Safe & translated',
+        translatedText: 'I translated it safely',
       },
     }],
   });
@@ -105,8 +104,9 @@ test('PDF HTML escapes transcript and metadata while retaining translation gloss
   assert.doesNotMatch(html, /<script>|<img src=x/);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.match(html, /Store &lt;001&gt;/);
-  assert.match(html, /Safe &amp; translated/);
-  assert.match(html, /<strong>EN<\/strong>/);
+  assert.match(html, /I translated it safely/);
+  assert.doesNotMatch(html, /<p>&lt;img src=x/);
+  assert.doesNotMatch(html, /<strong>EN<\/strong>/);
   assert.match(html, /Content-Security-Policy/);
   const longHtml = pdfHtml({
     entries: Array.from({ length: 1001 }, (_, index) => ({

@@ -94,7 +94,19 @@
     'hello', 'hi', 'hey', 'i', 'im', 'i\'m', 'we', 'you', 'the', 'this', 'that',
     'need', 'want', 'have', 'please', 'yes', 'no', 'charger', 'phone', 'price',
     'welcome', 'channel', 'everyone', 'newbie', 'my', 'to', 'a', 'is', 'are',
+    'thanks', 'thank', 'sorry', 'help', 'buy', 'sell', 'cost', 'available', 'product',
+    'store', 'return', 'refund', 'receipt', 'warranty', 'color', 'size', 'model',
+    'battery', 'screen', 'case', 'adapter', 'dollars', 'today', 'tomorrow', 'good',
+    'morning', 'afternoon', 'evening', 'new', 'old', 'more', 'less', 'discount',
+    'recommend', 'sale', 'okay', 'excuse', 'me', 'ready', 'work', 'here', 'there',
   ]);
+
+  function isEnglishTranslation(text, original = '') {
+    const value = String(text || '').trim();
+    if (!value || value === String(original || '').trim() || /[^\u0000-\u024f]/u.test(value)) return false;
+    if (isSpanishUtterance(value)) return false;
+    return value.toLowerCase().split(/[^a-z']+/).some((word) => ENGLISH_WORDS.has(word));
+  }
 
   function looksLikeSpanishText(text) {
     return isSpanishUtterance(text);
@@ -123,43 +135,31 @@
       const original = String(segment.originalText || entry.original || '').trim();
       if (!original) return null;
       const translated = String(segment.translatedText || entry.translated || '').trim();
+      const vettedEnglish = String(segment.englishText || entry.englishText || '').trim();
       const language = String(segment.language || entry.language || 'en').toLowerCase();
-      const spanish = isSpanishUtterance(original, language);
-      if (spanish) {
-        const translation = translated && translated !== original && !isSpanishUtterance(translated)
+      const english = language.split('-')[0] === 'en'
+        ? original
+        : vettedEnglish || (isEnglishTranslation(translated, original)
           ? translated
-          : '';
-        return { kind: 'es', original, translation };
-      }
-      return { kind: 'text', original };
+          : 'English translation unavailable');
+      return { kind: 'en', original, english };
     }).filter(Boolean);
   }
 
   function formatParagraphSpoken(entries) {
-    return paragraphParts(entries).map((part) => part.original).join(' ');
+    return formatParagraphEnglish(entries);
   }
 
   function formatParagraphStaffEnglish(entries) {
-    const parts = paragraphParts(entries);
-    return parts
-      .filter((part) => part.kind === 'es')
-      .map((part) => part.translation)
-      .filter(Boolean)
-      .join(' ');
+    return '';
   }
 
   function formatParagraphEnglish(entries) {
-    const parts = paragraphParts(entries);
-    return parts.map((part) => (
-      part.kind === 'es' ? (part.translation || part.original) : part.original
-    )).join(' ');
+    return paragraphParts(entries).map((part) => part.english).join(' ');
   }
 
   function formatParagraphPlain(entries) {
-    const spoken = formatParagraphSpoken(entries);
-    const staff = formatParagraphStaffEnglish(entries);
-    if (staff && staff !== spoken) return `${spoken}\nEN: ${staff}`;
-    return spoken;
+    return formatParagraphEnglish(entries);
   }
 
   function formatTime(value) {
@@ -211,16 +211,14 @@
           number: entry.number,
         }
       ));
-      const english = formatParagraphStaffEnglish(mapped);
-      const spoken = formatParagraphSpoken(mapped);
+      const english = formatParagraphEnglish(mapped);
       const stamp = typeof paragraph.startedAt === 'number'
         ? formatTime(paragraph.startedAt)
         : escapeHtml(String(paragraph.startedAt || ''));
       return `
     <article class="entry">
       <header><strong>Paragraph ${index + 1}</strong><span>${stamp}</span></header>
-      <p>${escapeHtml(spoken || 'No speech recognized.')}</p>
-      ${english && english !== spoken ? `<p class="en"><strong>EN</strong> ${escapeHtml(english)}</p>` : ''}
+      <p>${escapeHtml(english || 'No speech recognized.')}</p>
     </article>`;
     }).join('');
     return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>
@@ -237,6 +235,7 @@
     paragraphParts,
     looksLikeSpanishText,
     isSpanishUtterance,
+    isEnglishTranslation,
     formatParagraphSpoken,
     formatParagraphStaffEnglish,
     formatParagraphEnglish,

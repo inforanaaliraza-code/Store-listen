@@ -26,6 +26,7 @@ export interface TranscriptEvent {
   language: 'en' | 'es' | string;
   originalText: string;
   translatedText: string;
+  englishText: string;
   confidence: number;
   timestamp: string;
   isFinal: boolean;

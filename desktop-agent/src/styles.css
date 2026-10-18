@@ -172,7 +172,8 @@ svg { display: block; }
 #deliveryStat { display: flex; align-items: center; gap: 6px; font-size: 11px; }
 .stat-dot { width: 6px; height: 6px; border-radius: 50%; background: #85a98c; }
 .stat-dot.pending { background: #d7955b; }
-.capture-grid { display: grid; min-height: 0; flex: 1; grid-template-columns: minmax(0, 1fr) 200px; align-items: stretch; gap: 12px; }
+.capture-grid { display: grid; min-height: 0; flex: 1; grid-template-columns: 220px minmax(0, 1fr); grid-template-areas: "insights transcript"; align-items: stretch; gap: 12px; }
+.transcript-panel { grid-area: transcript; }
 .transcript-panel { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid #e3e9e3; border-radius: 8px; background: #fff; box-shadow: 0 12px 28px rgba(31,79,52,.07); }
 .section-header { display: flex; min-height: 52px; align-items: center; justify-content: space-between; padding: 8px 16px; border-bottom: 1px solid #edf0ed; }
 .section-header .eyebrow { font-size: 8px; }
@@ -210,7 +211,21 @@ svg { display: block; }
 .transcript-original { margin: 0; color: #263a2f; font-size: 21px; line-height: 1.55; overflow-wrap: anywhere; }
 .transcript-translation { margin: 8px 0 0; color: #687a6f; font-size: 17px; line-height: 1.55; overflow-wrap: anywhere; }
 .transcript-language { display: inline-flex; margin-top: 11px; padding: 4px 8px; border: 1px solid #e3ece3; border-radius: 3px; color: #68796e; background: #f5f8f4; font-size: 10px; font-weight: 700; text-transform: uppercase; }
-.insight-column { display: flex; min-width: 0; flex-direction: column; gap: 8px; overflow: auto; }
+.insight-column { display: flex; min-width: 0; flex-direction: column; gap: 8px; overflow: auto; grid-area: insights; }
+.live-coaching-panel { flex: 0 0 auto; padding: 11px 12px 12px; border: 1px solid #cfe3d4; border-radius: 6px; background: linear-gradient(145deg, #fff, #f3f9f3); box-shadow: 0 5px 14px rgba(31,79,52,.055); }
+.live-coaching-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.live-coaching-heading > div { display: grid; gap: 4px; }
+.live-coaching-heading > div > span { color: #31734e; font-size: 9px; font-weight: 800; letter-spacing: .08em; }
+.live-coaching-heading small { color: #859187; font-size: 9px; line-height: 1.35; }
+.live-coaching-heading > strong { flex: 0 0 auto; padding: 3px 5px; border: 1px solid #dcebe0; border-radius: 3px; color: #477554; background: #f7fbf7; font-size: 8px; }
+.live-coaching-panel h3 { margin: 11px 0 5px; color: #2e4737; font-size: 12px; font-weight: 750; line-height: 1.35; }
+.live-coaching-panel > p { margin: 0; color: #506456; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.live-coaching-alerts { margin-top: 10px; padding-top: 8px; border-top: 1px solid #eadfc9; }
+.live-coaching-alerts > strong { color: #a15e25; font-size: 9px; text-transform: uppercase; }
+.live-coaching-alerts ul { display: grid; gap: 7px; margin: 6px 0 0; padding: 0; list-style: none; }
+.live-coaching-alerts li { display: grid; gap: 2px; padding-left: 8px; border-left: 2px solid #d99551; }
+.live-coaching-alerts li strong { color: #835322; font-size: 9px; }
+.live-coaching-alerts li span { color: #85725c; font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }
 .insight-card { border: 1px solid #e3e9e3; border-radius: 6px; background: #fff; overflow: hidden; }
 .insight-card > summary { cursor: pointer; list-style: none; padding: 10px 12px; color: #3e5145; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; background: #f7faf7; }
 .insight-card > summary::-webkit-details-marker { display: none; }
@@ -369,7 +384,7 @@ body { font-size: 15px; }
   .page-content { padding: 20px 16px; }
   .capture-page { height: auto; overflow: auto; padding: 12px; }
   .capture-bar { grid-template-columns: minmax(0, 1fr); }
-  .capture-grid { grid-template-columns: minmax(0, 1fr); }
+  .capture-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "insights" "transcript"; }
   .insight-column { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .transcript-panel { min-height: 420px; }
   .transcript-library-header { align-items: stretch; flex-direction: column; }

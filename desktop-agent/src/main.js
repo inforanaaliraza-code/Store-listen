@@ -51,7 +51,10 @@ function completePendingWindowAction() {
   pendingWindowActionTimer = null;
   const action = pendingWindowAction;
   pendingWindowAction = null;
-  if (action === 'quit') app.quit();
+  if (action === 'quit') {
+    quitting = true;
+    app.quit();
+  }
   else if (action === 'hide' && !sessionEnding) mainWindow?.hide();
 }
 
@@ -125,7 +128,7 @@ function createWindow() {
   mainWindow.on('close', (event) => {
     if (!quitting && !sessionEnding) {
       event.preventDefault();
-      requestCaptureStop('hide');
+      app.quit();
     }
   });
   mainWindow.on('show', () => mainWindow.webContents.send('window-opened'));
@@ -310,6 +313,7 @@ if (!hasSingleInstanceLock) {
     mainWindow.focus();
   });
   app.whenReady().then(() => {
+    if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true, path: process.execPath });
     session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
       callback(permission === 'media' && webContents.getURL().startsWith('file://'));
     });
@@ -332,12 +336,14 @@ if (!hasSingleInstanceLock) {
   });
 }
 
-app.on('before-quit', () => { quitting = true; });
 app.on('before-quit', (event) => {
   if (quitting) return;
-  quitting = true;
-  if (sessionEnding || !mainWindow || mainWindow.isDestroyed()) return;
+  if (sessionEnding) {
+    quitting = true;
+    return;
+  }
   event.preventDefault();
+  quitting = true;
   requestCaptureStop('quit');
 });
 app.on('window-all-closed', () => {

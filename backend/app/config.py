@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     whisper_beam_size: int = Field(default=1, ge=1, le=5)
     whisper_cpu_threads: int = Field(default=2, ge=1, le=8)
     whisper_num_workers: int = Field(default=1, ge=1, le=4)
+    # Retained for environment compatibility; final non-English speech is always translated.
     whisper_translate_spanish: bool = True
     whisper_preview_enabled: bool = True
     whisper_warmup_on_start: bool = True

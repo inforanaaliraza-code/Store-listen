@@ -238,6 +238,7 @@ function showWorkspace(config) {
   window.clearInterval(state.setupHealthTimer);
   state.setupHealthTimer = null;
   state.config = config;
+  renderLiveCoaching(null, 'Ready when conversation starts');
   setupScreen.hidden = true;
   appScreen.hidden = false;
   $('#sidebarStore').textContent = config.storeName;
@@ -566,26 +567,12 @@ function createParagraphBlock(paragraph, index) {
   }).format(new Date(paragraph.startedAt));
   meta.append(label, time);
 
-  // Spoken language on top; English translation under Spanish (never Spanish under Spanish).
   const parts = transcriptTools.paragraphParts(paragraph.entries);
-  const spokenPlain = parts.map((part) => part.original).join(' ').trim();
-  const englishText = parts.map((part) => (
-    part.kind === 'es' ? (part.translation || '') : part.original
-  )).filter(Boolean).join(' ').trim();
+  const englishText = parts.map((part) => part.english).filter(Boolean).join(' ').trim();
   const body = document.createElement('p');
   body.className = 'transcript-paragraph-body';
-  body.textContent = spokenPlain || 'No speech detected.';
+  body.textContent = englishText || 'No speech detected.';
   item.append(meta, body);
-
-  if (parts.some((part) => part.kind === 'es')) {
-    const en = document.createElement('p');
-    en.className = 'transcript-paragraph-en';
-    const tag = document.createElement('span');
-    tag.className = 'transcript-en-tag';
-    tag.textContent = 'EN';
-    en.append(tag, document.createTextNode(` ${englishText || 'Translation unavailable'}`));
-    item.append(en);
-  }
   return item;
 }
 
@@ -651,37 +638,70 @@ function clearLivePartial() {
   }
 }
 
+function renderLiveCoaching(payload, status = 'Updated just now') {
+  const suggestion = payload?.suggestion;
+  setText('#liveCoachingStatus', status);
+  setText('#liveCoachingTitle', suggestion?.title || 'Listening for a customer need');
+  setText('#liveCoachingSuggestion', suggestion?.message || 'A suggested reply will appear here after the first clear conversation line.');
+  const confidence = $('#liveCoachingConfidence');
+  confidence.textContent = Number.isFinite(suggestion?.confidence)
+    ? `${Math.round(suggestion.confidence * 100)}%`
+    : '';
+  confidence.hidden = !confidence.textContent;
+
+  const alerts = Array.isArray(payload?.alerts) ? payload.alerts : [];
+  const alertList = $('#liveCoachingAlertList');
+  alertList.replaceChildren(...alerts.map((alert) => {
+    const row = document.createElement('li');
+    const title = document.createElement('strong');
+    const message = document.createElement('span');
+    title.textContent = String(alert.title || 'Review');
+    message.textContent = String(alert.message || '');
+    row.append(title, message);
+    return row;
+  }));
+  $('#liveCoachingAlerts').hidden = alerts.length === 0;
+}
+
+async function refreshLiveCoaching(capture, segment) {
+  const sequence = Number(segment.captureSequence || capture.sequence || 0);
+  if (sequence && sequence < (capture.latestCoachingSequence || 0)) return;
+  capture.latestCoachingSequence = Math.max(capture.latestCoachingSequence || 0, sequence);
+  const requestId = (capture.coachingRequestId || 0) + 1;
+  capture.coachingRequestId = requestId;
+  setText('#liveCoachingStatus', 'Updating from latest conversation…');
+  try {
+    const payload = await request(
+      `/api/v1/audio/coaching/${encodeURIComponent(capture.conversationId)}`,
+      { method: 'POST' },
+    );
+    if (state.capture !== capture || capture.coachingRequestId !== requestId) return;
+    renderLiveCoaching(payload);
+  } catch {
+    if (capture.coachingRequestId === requestId) {
+      renderLiveCoaching(null, 'Suggestions temporarily unavailable');
+    }
+  }
+}
+
 function showLivePartial(segment) {
   const original = String(segment?.originalText || '').trim();
   if (!original || isClientJunkLive(original)) return;
   const translated = String(segment?.translatedText || '').trim();
-  const language = String(segment?.language || 'en').toLowerCase();
-  const spanish = language === 'es' || transcriptTools.looksLikeSpanishText?.(original)
-    || /[¿¡ñáéíóúü]|señor|tenemos|producto|gracias|hola|dólares|dolares/i.test(original);
-  const english = spanish
-    && translated
-    && translated !== original
-    && !(transcriptTools.looksLikeSpanishText?.(translated) || /señor|tenemos|producto|gracias|hola|dólares|dolares/i.test(translated))
-    ? translated
-    : '';
+  const language = String(segment?.language || 'en').toLowerCase().split('-')[0];
+  const english = language === 'en'
+    ? original
+    : String(segment?.englishText || '').trim()
+      || (transcriptTools.isEnglishTranslation?.(translated, original) ? translated : '');
+  if (!english) {
+    clearLivePartial();
+    return;
+  }
   if (state.capture) {
-    state.capture.latestPreviewText = original;
-    state.capture.livePartialEnglish = english;
+    state.capture.latestPreviewText = english;
+    state.capture.livePartialEnglish = '';
   }
-  paintLiveTrail(original);
-  const body = getOrCreateLiveBody();
-  const paragraph = body.closest('.transcript-paragraph');
-  if (spanish && paragraph) {
-    let en = paragraph.querySelector('.transcript-paragraph-en');
-    if (!en) {
-      en = document.createElement('p');
-      en.className = 'transcript-paragraph-en';
-      en.innerHTML = '<span class="transcript-en-tag">EN</span> <span class="live-en-text"></span>';
-      paragraph.append(en);
-    }
-    const enText = en.querySelector('.live-en-text');
-    if (enText) enText.textContent = english || 'Translating…';
-  }
+  paintLiveTrail(english);
 }
 
 function captureDuration(session) {
@@ -714,6 +734,7 @@ async function downloadTranscript(session, format) {
         language: entry.segment.language || 'und',
         originalText: entry.segment.originalText || 'No speech recognized.',
         translatedText: entry.segment.translatedText || '',
+        englishText: entry.segment.englishText || '',
         segment: entry.segment,
       })),
     });
@@ -957,13 +978,16 @@ async function uploadSegment(capture, blob, sequence, offset, duration) {
   });
   setHidden('#liveTranscriptPreview', true);
   setText('#liveTranscriptPreviewText', '');
-  if (response.segment) addTranscript({
-    ...response.segment,
-    sessionOffsetSeconds: offset,
-    transcriptionMs: response.transcription_ms,
-    roundTripMs: Math.round(performance.now() - uploadStartedAt),
-    speechProvider: response.speech_provider,
-  });
+  if (response.segment) {
+    addTranscript({
+      ...response.segment,
+      sessionOffsetSeconds: offset,
+      transcriptionMs: response.transcription_ms,
+      roundTripMs: Math.round(performance.now() - uploadStartedAt),
+      speechProvider: response.speech_provider,
+    });
+    void refreshLiveCoaching(capture, response.segment);
+  }
   else if (!capture.recorder && !capture.speaking) {
     // The server heard no real speech in this clip: remove the provisional words instead of leaving them.
     clearLivePartial();
@@ -1273,6 +1297,7 @@ async function startCaptureSession() {
       status: 'LIVE',
       entries: [],
     };
+    renderLiveCoaching(null, 'Waiting for conversation…');
     state.sessions.unshift(transcriptSession);
     if (state.sessions.length > 500) state.sessions.pop();
     saveTranscriptArchive();
@@ -1285,7 +1310,7 @@ async function startCaptureSession() {
     const liveTitle = document.createElement('strong');
     liveTitle.textContent = 'Listening — live transcript';
     const liveNote = document.createElement('span');
-    liveNote.textContent = 'Words appear while you speak. Spanish lines include an English translation underneath.';
+    liveNote.textContent = 'Conversation transcript and staff suggestions appear in English.';
     liveEmpty.append(liveTitle, liveNote);
     $('#transcriptList').replaceChildren(liveEmpty);
     $('#navTranscriptCount').textContent = String(state.sessions.length);
@@ -1306,6 +1331,8 @@ async function startCaptureSession() {
       previewThrottle: null,
       previewSequence: 0,
       previewAppliedSequence: 0,
+      coachingRequestId: 0,
+      latestCoachingSequence: 0,
       spokeInSegment: false,
       segmentPeakRms: 0,
       uploadQueue: Promise.resolve(),

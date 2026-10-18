@@ -11,6 +11,7 @@ from app.providers.speech import (
     resolve_speech_cloud_config,
     resolve_speech_provider_name,
 )
+from app.providers.ai import MockAIProvider
 
 
 def _clear_provider_cache() -> None:
@@ -72,3 +73,16 @@ def test_openai_alias_uses_cloud_provider(monkeypatch) -> None:
     _clear_provider_cache()
     assert resolve_speech_provider_name("openai") == "cloud"
     assert get_speech_provider("openai").name == "openai"
+
+
+def test_mock_live_coaching_gives_a_careful_model_specific_reply():
+    result = MockAIProvider().analyze(
+        "Recent turn 1: Do you have the iPhone 18 Pro Max in stock?",
+        "Recent turn 1: Do you have the iPhone 18 Pro Max in stock?",
+        "en",
+        "unknown",
+    )
+
+    assert result.product == "iPhone 18 Pro Max"
+    assert "iPhone 18 Pro Max" in result.recommendation
+    assert "before i promise availability" in result.recommendation.lower()

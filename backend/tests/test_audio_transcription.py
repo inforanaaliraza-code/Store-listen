@@ -87,11 +87,13 @@ def test_whisper_tempfile_is_closed_before_transcription(monkeypatch):
     assert seen["audio_path"] == "C:/tmp/whisper-voice.webm"
 
 
-def test_whisper_rejects_languages_outside_english_and_spanish(monkeypatch, tmp_path):
+def test_whisper_translates_detected_french_into_english(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     class FrenchModel:
         def transcribe(self, audio_path, **kwargs):
+            if kwargs.get("task") == "translate":
+                return iter([SimpleNamespace(text="I would like to buy a phone, please.", avg_logprob=-0.1)]), SimpleNamespace(language="fr")
             segment = SimpleNamespace(
                 text="Je voudrais acheter un telephone s'il vous plait",
                 avg_logprob=-0.1,
@@ -99,17 +101,45 @@ def test_whisper_rejects_languages_outside_english_and_spanish(monkeypatch, tmp_
             return iter([segment]), SimpleNamespace(language="fr")
 
     monkeypatch.setattr(WhisperSpeechProvider, "_get_model", lambda _self: FrenchModel())
+    monkeypatch.setattr("app.providers.speech.settings.whisper_translate_spanish", True)
+    audio_path = tmp_path / "french.webm"
+    audio_path.write_bytes(b"sample audio")
 
-    with pytest.raises(UnsupportedLanguageDetected):
-        WhisperSpeechProvider().transcribe_file(tmp_path / "french.wav")
+    result = WhisperSpeechProvider().transcribe_file(audio_path)
+
+    assert result.language == "fr"
+    assert result.original_text == "Je voudrais acheter un telephone s'il vous plait"
+    assert result.translated_text == "I would like to buy a phone, please"
 
 
-def test_supported_languages_are_english_and_spanish_only():
+def test_whisper_fast_foreign_preview_skips_translation(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    calls = []
+
+    class FrenchModel:
+        def transcribe(self, audio_path, **kwargs):
+            calls.append(kwargs)
+            return iter([SimpleNamespace(text="Je voudrais un téléphone", avg_logprob=-0.1)]), SimpleNamespace(language="fr")
+
+    monkeypatch.setattr(WhisperSpeechProvider, "_get_model", lambda _self: FrenchModel())
+    audio_path = tmp_path / "french-preview.webm"
+    audio_path.write_bytes(b"sample audio")
+
+    result = WhisperSpeechProvider().transcribe_file(audio_path, fast=True)
+
+    assert result.language == "fr"
+    assert result.translated_text == result.original_text
+    assert len(calls) == 1
+
+
+def test_language_normalization_preserves_any_detected_language_code():
     assert normalize_supported_language("en-US") == "en"
     assert normalize_supported_language("es-MX") == "es"
-    assert normalize_supported_language("hi-IN") is None
-    assert normalize_supported_language("ur-PK") is None
-    assert normalize_supported_language("fr-FR") is None
+    assert normalize_supported_language("hi-IN") == "hi"
+    assert normalize_supported_language("ur-PK") == "ur"
+    assert normalize_supported_language("fr-FR") == "fr"
+    assert normalize_supported_language("und") is None
 
 
 def test_audio_preview_is_disabled_by_default_for_latency(monkeypatch):
@@ -182,6 +212,50 @@ def test_audio_preview_broadcasts_partial_without_saving_audio_or_transcript(mon
         db.close()
 
 
+def test_audio_preview_does_not_broadcast_untranslated_foreign_speech(monkeypatch):
+    from app import api as api_module
+    from app.config import settings
+
+    class ForeignPreviewProvider:
+        name = "test-whisper"
+
+        def transcribe_file(self, audio_path: str, language_hint: str | None = None, *, fast: bool = False) -> SpeechResult:
+            return SpeechResult("Bonjour, je voudrais un téléphone", "fr", "", 0.9, False)
+
+    events = []
+
+    async def capture_event(room, event):
+        events.append((room, event))
+
+    monkeypatch.setattr(settings, "whisper_preview_enabled", True)
+    monkeypatch.setattr(api_module, "get_speech_provider", lambda _name: ForeignPreviewProvider())
+    monkeypatch.setattr(api_module.hub, "publish", capture_event)
+    client.cookies.clear()
+    login = client.post("/api/v1/auth/login", json={"email": "admin@storelisten.demo", "password": "StoreListen!2026"})
+    headers = {"Authorization": f"Bearer {login.json()['token']}"}
+    session = client.post("/api/v1/audio/sessions", headers=headers, json={"store_id": "store-001"})
+    conversation_id = session.json()["conversation_id"]
+    events.clear()
+
+    response = client.post(
+        "/api/v1/audio/transcribe/preview",
+        headers=headers,
+        data={"store_id": "store-001", "conversation_id": conversation_id, "capture_sequence": 1, "preview_sequence": 1},
+        files={"audio": ("foreign-preview.webm", b"sample audio", "audio/webm")},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["segment"] is None
+    assert response.json()["preview_status"] == "english_translation_pending"
+    assert not any(event.get("event") == "transcript.partial" for _, event in events)
+    db = SessionLocal()
+    try:
+        db.query(Conversation).filter(Conversation.id == conversation_id).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+
 def test_whisper_uses_configured_low_latency_beam_size(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
@@ -231,7 +305,7 @@ def test_whisper_drops_noise_marked_segments_and_keeps_clear_speech(monkeypatch,
     assert result.original_text == "Do you have a charger?"
 
 
-def test_whisper_skips_second_spanish_translation_pass_by_default(monkeypatch, tmp_path):
+def test_whisper_always_translates_non_english_when_legacy_toggle_is_off(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     from app.config import settings
@@ -241,7 +315,8 @@ def test_whisper_skips_second_spanish_translation_pass_by_default(monkeypatch, t
     class FastSpanishModel:
         def transcribe(self, audio_path, **kwargs):
             calls.append(kwargs)
-            return iter([SimpleNamespace(text="Hola, necesito ayuda", avg_logprob=-0.1)]), SimpleNamespace(language="es")
+            text = "Thank you, I need help" if kwargs.get("task") == "translate" else "Hola, necesito ayuda"
+            return iter([SimpleNamespace(text=text, avg_logprob=-0.1)]), SimpleNamespace(language="es")
 
     monkeypatch.setattr(settings, "whisper_translate_spanish", False)
     monkeypatch.setattr(WhisperSpeechProvider, "_get_model", lambda _self: FastSpanishModel())
@@ -252,8 +327,9 @@ def test_whisper_skips_second_spanish_translation_pass_by_default(monkeypatch, t
 
     assert result.language == "es"
     assert result.original_text == "Hola, necesito ayuda"
-    assert result.translated_text == result.original_text
-    assert len(calls) == 1
+    assert result.translated_text == "Thank you, I need help"
+    assert len(calls) == 2
+    assert calls[1]["task"] == "translate"
 
 
 def test_whisper_can_keep_optional_spanish_translation(monkeypatch, tmp_path):
@@ -282,7 +358,7 @@ def test_whisper_can_keep_optional_spanish_translation(monkeypatch, tmp_path):
     assert calls[1]["task"] == "translate"
 
 
-def test_api_does_not_save_transcripts_for_unsupported_languages(monkeypatch):
+def test_api_saves_non_english_speech_with_english_translation(monkeypatch):
     from app import api as api_module
 
     class FrenchSpeechProvider:
@@ -320,11 +396,13 @@ def test_api_does_not_save_transcripts_for_unsupported_languages(monkeypatch):
             files={"audio": ("french.webm", b"french audio", "audio/webm")},
         )
         assert response.status_code == 200, response.text
-        assert response.json()["segment"] is None
-        assert response.json()["analysis_status"] == "unsupported_language"
-        assert response.json()["detected_language"] == "fr"
+        assert response.json()["segment"]["language"] == "fr"
+        assert response.json()["segment"]["originalText"] == "Bonjour"
+        assert response.json()["segment"]["translatedText"] == "Hello"
         transcript = client.get(f"/api/v1/conversations/{conversation_id}/transcript", headers=headers)
-        assert transcript.json()["segments"] == []
+        assert transcript.json()["segments"][0]["language"] == "fr"
+        assert transcript.json()["segments"][0]["translated_text"] == "Hello"
+        assert transcript.json()["segments"][0]["english_text"] == "Hello"
     finally:
         db = SessionLocal()
         try:
@@ -332,6 +410,91 @@ def test_api_does_not_save_transcripts_for_unsupported_languages(monkeypatch):
             for recording in recordings:
                 delete_audio_clip(recording.storage_key)
                 db.delete(recording)
+            db.query(Conversation).filter(Conversation.id == conversation_id).delete(synchronize_session=False)
+            db.commit()
+        finally:
+            db.close()
+
+
+def test_live_coaching_uses_recent_transcript_and_returns_staff_guidance(monkeypatch):
+    from app import api as api_module
+    from app.providers.ai import AnalysisResult
+
+    conversation_id = f"conv-coaching-{uuid4().hex}"
+    db = SessionLocal()
+    db.add(Conversation(
+        id=conversation_id,
+        store_id="store-001",
+        status="LIVE",
+        primary_language="en",
+        opportunity_status="UNKNOWN",
+    ))
+    db.add_all([
+        TranscriptSegment(
+            id=f"segment-coaching-old-{uuid4().hex[:8]}",
+            conversation_id=conversation_id,
+            speaker_id="speaker-unknown",
+            language="en",
+            original_text="I am looking for a new phone",
+            translated_text="I am looking for a new phone",
+            start_time=1,
+            end_time=3,
+            confidence=0.9,
+            is_final=True,
+        ),
+        TranscriptSegment(
+            id=f"segment-coaching-new-{uuid4().hex[:8]}",
+            conversation_id=conversation_id,
+            speaker_id="speaker-unknown",
+            language="en",
+            original_text="Do you have the iPhone 18 Pro Max in stock?",
+            translated_text="Do you have the iPhone 18 Pro Max in stock?",
+            start_time=4,
+            end_time=7,
+            confidence=0.9,
+            is_final=True,
+        ),
+    ])
+    db.commit()
+    db.close()
+
+    calls = []
+
+    class CoachingProvider:
+        def analyze(self, original_text, translated_text, language, speaker_role):
+            calls.append((original_text, language, speaker_role))
+            return AnalysisResult(
+                intent="product_availability",
+                product="iPhone 18 Pro Max",
+                opportunity=True,
+                recommendation="Say: Let me check our live inventory for the iPhone 18 Pro Max.",
+                confidence=0.92,
+            )
+
+    monkeypatch.setattr(api_module, "get_ai_provider", lambda _name: CoachingProvider())
+    client.cookies.clear()
+    login = client.post("/api/v1/auth/login", json={"email": "admin@storelisten.demo", "password": "StoreListen!2026"})
+    headers = {"Authorization": f"Bearer {login.json()['token']}"}
+
+    try:
+        response = client.post(f"/api/v1/audio/coaching/{conversation_id}", headers=headers)
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["suggestion"]["message"].startswith("Say:")
+        assert payload["context_turns"] == 2
+        assert any(alert["title"] == "Check availability" for alert in payload["alerts"])
+        assert "iPhone 18 Pro Max" in calls[0][0]
+        assert calls[0][1:] == ("en", "unknown")
+        db = SessionLocal()
+        try:
+            assert db.query(SalesRecommendation).filter(SalesRecommendation.conversation_id == conversation_id).count() == 0
+        finally:
+            db.close()
+    finally:
+        db = SessionLocal()
+        try:
+            db.query(TranscriptSegment).filter(TranscriptSegment.conversation_id == conversation_id).delete(synchronize_session=False)
             db.query(Conversation).filter(Conversation.id == conversation_id).delete(synchronize_session=False)
             db.commit()
         finally:

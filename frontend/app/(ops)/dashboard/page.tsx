@@ -100,6 +100,7 @@ export default function DashboardPage() {
             speakerLabel?: string;
             originalText?: string;
             translatedText?: string;
+            englishText?: string;
             language?: string;
             conversationId?: string;
             captureSequence?: number;
@@ -118,20 +119,24 @@ export default function DashboardPage() {
             const newestPreview = previewSequences.get(conversationId) ?? 0;
             if (captureSequence > newestFinal && previewSequence >= newestPreview) {
               previewSequences.set(conversationId, previewSequence);
-              setLiveStatus(event.originalText);
+              const sourceLanguage = event.language?.toLowerCase().split('-')[0] || 'en';
+              const original = event.originalText.trim();
+              const english = event.englishText?.trim() || '';
+              setLiveStatus(sourceLanguage === 'en'
+                ? original
+                : english && english !== original
+                  ? english
+                  : 'Translating conversation to English…');
             }
           }
           if (event.event === 'transcript.final' && event.originalText) {
             finalCaptureSequences.set(conversationId, Math.max(finalCaptureSequences.get(conversationId) ?? 0, event.captureSequence ?? 0));
             previewSequences.delete(conversationId);
             const original = event.originalText.trim();
-            const translated = event.translatedText?.trim() || '';
-            const spanish = event.language?.toLowerCase().startsWith('es') ?? false;
-            const english = translated && translated !== original
-              ? translated
-              : spanish
-                ? 'Spanish speech recognized; English translation unavailable'
-                : original;
+            const sourceLanguage = event.language?.toLowerCase().split('-')[0] || 'en';
+            const english = sourceLanguage === 'en'
+              ? original
+              : event.englishText?.trim() || 'English translation unavailable';
             const line: LiveLine = {
               id: event.segmentId || `${event.timestamp}-${Math.random()}`,
               storeId: event.storeId || storeId,

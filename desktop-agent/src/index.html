@@ -117,12 +117,24 @@
                 <div class="empty-transcript" id="emptyTranscript">
                   <span class="empty-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
                   <strong>Conversation lines appear here</strong>
-                  <span>Spanish lines include an English translation for staff.</span>
+                  <span>Conversation transcript and staff suggestions appear in English.</span>
                 </div>
               </div>
             </article>
 
             <aside class="insight-column">
+              <section class="live-coaching-panel" aria-live="polite" aria-atomic="true">
+                <header class="live-coaching-heading">
+                  <div><span>AI SUGGESTIONS</span><small id="liveCoachingStatus">Ready when conversation starts</small></div>
+                  <strong id="liveCoachingConfidence" hidden></strong>
+                </header>
+                <h3 id="liveCoachingTitle">Listening for a customer need</h3>
+                <p id="liveCoachingSuggestion">A suggested reply will appear here after the first clear conversation line.</p>
+                <section class="live-coaching-alerts" id="liveCoachingAlerts" hidden>
+                  <strong>Alerts</strong>
+                  <ul id="liveCoachingAlertList"></ul>
+                </section>
+              </section>
               <details class="insight-card" open>
                 <summary>Connection</summary>
                 <div class="connection-panel">

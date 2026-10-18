@@ -79,7 +79,7 @@ from app.models import (
     TranscriptSegment,
     User,
 )
-from app.providers.ai import generate_conversation_report, summarize_daily_report
+from app.providers.ai import generate_conversation_report, get_ai_provider, summarize_daily_report
 from app.providers.pos import get_pos_provider
 from app.providers.speech import (
     NoSpeechDetected,
@@ -88,7 +88,7 @@ from app.providers.speech import (
     normalize_supported_language,
     resolve_speech_provider_name,
 )
-from app.providers.speech_quality import is_recent_duplicate
+from app.providers.speech_quality import english_display_text, is_recent_duplicate
 from app.security import create_access_token, current_user, decode_token, hash_device_secret, new_device_secret, verify_password
 from app.services.demo_live import run_live_demo
 from app.services.events import hub
@@ -727,7 +727,11 @@ def recordings_library(
         for segment in db.query(TranscriptSegment).filter(
             TranscriptSegment.conversation_id.in_(conversation_ids)
         ).order_by(TranscriptSegment.start_time.asc()).all():
-            transcript_by_conversation.setdefault(segment.conversation_id, segment.translated_text or segment.original_text)
+            english_text = english_display_text(segment.original_text, segment.translated_text, segment.language)
+            transcript_by_conversation.setdefault(
+                segment.conversation_id,
+                english_text,
+            )
         for run in db.query(AiProcessingRun).filter(AiProcessingRun.conversation_id.in_(conversation_ids)).all():
             if run.status == "completed":
                 analysis_by_conversation[run.conversation_id] = "analyzed"
@@ -1192,6 +1196,7 @@ def transcript(
                 "language": row.language,
                 "original_text": row.original_text,
                 "translated_text": row.translated_text,
+                "english_text": english_display_text(row.original_text, row.translated_text, row.language),
                 "start_time": row.start_time,
                 "end_time": row.end_time,
                 "confidence": row.confidence,
@@ -1399,7 +1404,7 @@ async def preview_audio_transcription(
     if language_hint:
         language_hint = normalize_supported_language(language_hint)
         if language_hint is None:
-            raise HTTPException(422, "Language hint must be English or Spanish.")
+            raise HTTPException(422, "Language hint must be a supported language code.")
 
     suffix = {"audio/webm": ".webm", "audio/ogg": ".ogg", "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/mp4": ".m4a", "audio/mpeg": ".mp3"}[content_type]
     provider = get_speech_provider(settings.speech_provider)
@@ -1408,7 +1413,7 @@ async def preview_audio_transcription(
     try:
         with os.fdopen(fd, "wb") as audio_file:
             audio_file.write(audio_bytes)
-        # Fast preview: skip Spanish→English translate; non-blocking if STT pool is full.
+        # Fast preview skips the costly English translation pass and never publishes foreign source text.
         result = await _transcribe_audio_file(provider, temp_path, language_hint, wait=False, fast=True)
         if result is None:
             return {
@@ -1427,6 +1432,16 @@ async def preview_audio_transcription(
         except FileNotFoundError:
             pass
 
+    if result.language != "en" and (
+        not result.translated_text or result.translated_text.strip() == result.original_text.strip()
+    ):
+        return {
+            "segment": None,
+            "preview_sequence": preview_sequence,
+            "transcription_ms": round((perf_counter() - started) * 1000),
+            "preview_status": "english_translation_pending",
+        }
+
     transcription_ms = round((perf_counter() - started) * 1000)
     event = {
         "event": "transcript.partial",
@@ -1439,6 +1454,7 @@ async def preview_audio_transcription(
         "language": result.language,
         "originalText": result.original_text,
         "translatedText": result.translated_text,
+        "englishText": english_display_text(result.original_text, result.translated_text, result.language),
         "confidence": result.confidence,
         "isFinal": False,
         "source": f"{provider.name}_preview",
@@ -1489,7 +1505,7 @@ async def transcribe_audio(
     if language_hint:
         language_hint = normalize_supported_language(language_hint)
         if language_hint is None:
-            raise HTTPException(422, "Language hint must be English or Spanish.")
+            raise HTTPException(422, "Language hint must be a supported language code.")
 
     if conversation_id:
         conversation = _audio_conversation(db, conversation_id, store_id, actor)
@@ -1659,6 +1675,7 @@ async def transcribe_audio(
         "language": result.language,
         "originalText": result.original_text,
         "translatedText": result.translated_text,
+        "englishText": english_display_text(result.original_text, result.translated_text, result.language),
         "confidence": result.confidence,
         "isFinal": True,
         "source": provider.name,
@@ -1755,6 +1772,84 @@ async def transcribe_audio(
         "analysis_status": analysis_status,
         "raw_audio_stored": True,
         "audio_recording_id": audio_recording.id,
+    }
+
+
+@api.post("/audio/coaching/{conversation_id}")
+async def live_coaching_suggestions(
+    conversation_id: str,
+    db: Session = Depends(get_db),
+    actor: tuple[User | None, StoreDevice | None] = Depends(_audio_actor),
+) -> dict[str, Any]:
+    conversation = _audio_conversation(db, conversation_id, None, actor)
+    if not conversation:
+        raise HTTPException(404, "Live conversation not found")
+    _user, device = actor
+    if device is not None and not device_is_approved(device):
+        raise HTTPException(403, "This device is not approved for live coaching.")
+
+    segments = db.query(TranscriptSegment).filter(
+        TranscriptSegment.conversation_id == conversation_id
+    ).order_by(
+        TranscriptSegment.start_time.desc(),
+        TranscriptSegment.created_at.desc(),
+        TranscriptSegment.id.desc(),
+    ).limit(5).all()
+    context_lines = [
+        english_display_text(segment.original_text, segment.translated_text, segment.language)
+        for segment in reversed(segments)
+    ]
+    context_lines = [line for line in context_lines if line and line != "English translation unavailable"]
+    if not context_lines:
+        raise HTTPException(409, "No English conversation text is ready for coaching yet.")
+
+    context = "\n".join(f"Recent turn {index + 1}: {line}" for index, line in enumerate(context_lines))
+    provider_name = "mock" if settings.demo_mode else settings.ai_provider
+    provider = get_ai_provider(provider_name)
+    try:
+        analysis = await run_in_threadpool(
+            provider.analyze,
+            original_text=context,
+            translated_text=context,
+            language="en",
+            speaker_role="unknown",
+        )
+    except Exception as exc:
+        logger.info("Live coaching unavailable provider=%s conversation_id=%s", provider_name, conversation_id)
+        raise HTTPException(503, "Live coaching is temporarily unavailable. Keep listening; the transcript is still saved.") from exc
+
+    recent_text = " ".join(context_lines[-2:]).casefold()
+    alerts: list[dict[str, str]] = []
+    if any(term in recent_text for term in ("available", "in stock", "do you have", "do you carry", "stock")):
+        alerts.append({
+            "title": "Check availability",
+            "message": "Verify live inventory before promising the item is in stock.",
+        })
+    if any(term in recent_text for term in ("how much", "price", "cost", "discount")):
+        alerts.append({
+            "title": "Confirm current price",
+            "message": "Check the current SKU price and any active offer before quoting.",
+        })
+    if analysis.confidence < 0.6:
+        alerts.append({
+            "title": "Clarify before recommending",
+            "message": "The conversation is not clear enough yet; ask one short follow-up question.",
+        })
+    alerts.extend(
+        {"title": "Customer concern", "message": objection[:240]}
+        for objection in analysis.objections[:2]
+        if objection.strip()
+    )
+    return {
+        "conversation_id": conversation_id,
+        "context_turns": len(context_lines),
+        "suggestion": {
+            "title": "Suggested response",
+            "message": (analysis.recommendation or "Acknowledge the customer and ask one clarifying question.")[:500],
+            "confidence": max(0.0, min(1.0, analysis.confidence)),
+        },
+        "alerts": alerts,
+        "updated_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -2244,14 +2339,35 @@ def settings_view(db: Session = Depends(get_db), user: User = Depends(current_us
 def register_device(body: DeviceRegister, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
     _employee_store_for_write(db, body.store_id, user)
     raw = new_device_secret()
+    previously_approved_device = db.query(StoreDevice).filter(
+        StoreDevice.store_id == body.store_id,
+        StoreDevice.approval_status == "approved",
+        StoreDevice.revoked.is_(False),
+    ).first()
+    prior_approval_audit = db.query(AuditLog).filter(
+        AuditLog.action == "device.approved",
+        AuditLog.entity == "store_device",
+        AuditLog.detail == body.store_id,
+    ).order_by(AuditLog.created_at.asc()).first()
+    store_previously_approved = bool(previously_approved_device or prior_approval_audit)
     device = StoreDevice(
         id=f"device-{uuid4().hex[:8]}",
         store_id=body.store_id,
         name=body.name,
-        status="pending_approval",
-        approval_status="pending",
+        status="registered" if store_previously_approved else "pending_approval",
+        approval_status="approved" if store_previously_approved else "pending",
         audio_source=body.audio_source,
         secret_hash=hash_device_secret(raw),
+        approved_at=(
+            prior_approval_audit.created_at if prior_approval_audit
+            else previously_approved_device.approved_at if previously_approved_device
+            else None
+        ),
+        approved_by=(
+            prior_approval_audit.actor_id if prior_approval_audit
+            else previously_approved_device.approved_by if previously_approved_device
+            else None
+        ),
     )
     db.add(device)
     db.add(AuditLog(
@@ -2260,14 +2376,15 @@ def register_device(body: DeviceRegister, db: Session = Depends(get_db), user: U
         action="device.registered",
         entity="store_device",
         entity_id=device.id,
-        detail=f"{body.store_id};pending",
+        detail=f"{body.store_id};{'approved' if store_previously_approved else 'pending'}",
     ))
     db.commit()
     return {
         "device_id": device.id,
         "device_secret": raw,
-        "approval_status": "pending",
-        "note": "Device registered and awaiting admin approval. Store the device secret once; recording stays blocked until approved.",
+        "approval_status": device_approval_status(device),
+        "note": "Store approval already exists; this device can record now." if store_previously_approved
+        else "Device registered and awaiting first approval for this store. Future devices will be approved automatically.",
     }
 
 

@@ -5,7 +5,7 @@ import { useParams } from '@/lib/router-hooks';
 import { useEffect, useState } from 'react';
 import { apiBlob, apiGet, apiPatch, apiPost, type Conversation } from '../../../../lib/api';
 
-type Segment = { id: string; speaker_id: string; speaker_label?: string; speaker_role?: string; employee_id?: string | null; language: string; original_text: string; translated_text: string | null; confidence: number; start_time: number };
+type Segment = { id: string; speaker_id: string; speaker_label?: string; speaker_role?: string; employee_id?: string | null; language: string; original_text: string; translated_text: string | null; english_text?: string; confidence: number; start_time: number };
 type Recording = { id: string; captured_at: string; duration_seconds: number; byte_size: number; sequence: number; speaker_role: string; playback_path: string };
 type Opportunity = { id: string; customer_intent: string; product: string; status: string; confidence: number; recommendation: string; manager_note?: string | null };
 type Recommendation = { id: string; title: string; message: string; confidence: number };
@@ -191,7 +191,7 @@ export default function ConversationDetailPage() {
       <Link href="/conversations" className="analysis-back">← Back to conversations</Link>
       <header className="analysis-page-header">
         <div>
-          <span className="eyebrow">CONVERSATION ANALYSIS · {conversation.language.toUpperCase()}</span>
+          <span className="eyebrow">CONVERSATION ANALYSIS</span>
           <h1 className="serif">Customer {conversation.id.slice(-6)}</h1>
           <div className="analysis-metadata">
             <span>Representative: {conversation.salesperson || 'Unassigned'}</span>
@@ -277,13 +277,15 @@ export default function ConversationDetailPage() {
                   ? 'Speaker'
                   : (segment.speaker_label || (speakerRole === 'customer' ? 'Customer' : speakerRole === 'employee' ? 'Representative' : 'Speaker'));
                 const customer = speakerRole === 'customer';
+                const englishText = segment.english_text || (segment.language.toLowerCase().split('-')[0] === 'en'
+                  ? segment.original_text
+                  : 'English translation unavailable');
                 return <div className={`analysis-message ${customer ? 'customer' : 'representative'}`} key={segment.id}>
                   <div className="analysis-message-meta">
                     <span className="analysis-message-speaker"><i>{customer ? 'C' : speakerRole === 'employee' ? 'R' : '?'}</i>{speaker}</span>
-                    <span>{segment.language.toUpperCase()} · {Math.round(segment.confidence * 100)}%</span>
+                    <span>{Math.round(segment.confidence * 100)}% confidence</span>
                   </div>
-                  <p>{segment.original_text}</p>
-                  {segment.translated_text && segment.translated_text !== segment.original_text ? <small>EN · {segment.translated_text}</small> : null}
+                  <p>{englishText}</p>
                   <div className="analysis-message-footer">
                     <time>{Math.floor(segment.start_time / 60).toString().padStart(2, '0')}:{Math.floor(segment.start_time % 60).toString().padStart(2, '0')}</time>
                     <label>Speaker

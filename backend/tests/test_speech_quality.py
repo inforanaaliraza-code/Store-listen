@@ -1,5 +1,7 @@
 from app.providers.speech_quality import (
     filter_whisper_segments,
+    detect_transcript_language,
+    english_display_text,
     is_hallucinated_transcript,
     is_recent_duplicate,
     is_usable_english_translation,
@@ -73,6 +75,25 @@ def test_usable_english_translation_rejects_spanish_echo():
         "Señor, tenemos este producto",
     )
     assert polish_spanish_translation("Gracias", "Gracias") == "Thank you"
+
+
+def test_non_english_translation_rejects_foreign_echo_and_requires_english():
+    assert is_usable_english_translation("Bonjour", "Hello", "fr")
+    assert not is_usable_english_translation("Bonjour", "Bonjour", "fr")
+    assert not is_usable_english_translation("Bonjour", "Je voudrais un telephone", "fr")
+    assert not is_usable_english_translation("नमस्ते", "नमस्ते", "hi")
+    assert is_usable_english_translation("Hola", "Hello", "es")
+    assert english_display_text("Hello there", "Hello there", "en") == "Hello there"
+    assert english_display_text("Bonjour", "", "fr") == "English translation unavailable"
+
+
+def test_detects_source_language_when_transcription_provider_omits_it():
+    assert detect_transcript_language("I need help") == "en"
+    assert detect_transcript_language("Hello friend") == "en"
+    assert detect_transcript_language("Bonjour") == "fr"
+    assert detect_transcript_language("Hola, necesito un cargador") == "es"
+    assert detect_transcript_language("Je voudrais un téléphone, s'il vous plaît", "en") == "fr"
+    assert detect_transcript_language("नमस्ते, मुझे फ़ोन चार्जर चाहिए", "en") == "hi"
 
 
 def test_whisper_segments_marked_as_silence_are_dropped():

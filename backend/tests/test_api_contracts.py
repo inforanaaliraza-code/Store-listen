@@ -578,7 +578,13 @@ def test_conversation_report_transcribes_retained_audio_when_transcript_is_missi
             return SpeechResult("I need a phone charger.", "en", "I need a phone charger.", 0.9, True)
 
     def fake_report(transcript):
-        assert transcript == [{"role": "unknown", "language": "en", "time_seconds": 0.0, "text": "I need a phone charger."}]
+        assert transcript == [{
+            "role": "unknown",
+            "language": "en",
+            "time_seconds": 0.0,
+            "text": "I need a phone charger.",
+            "original_text": "I need a phone charger.",
+        }]
         return ConversationReport(
             summary="The speaker asks about a phone charger.",
             customer_needs=["A phone charger"],
@@ -769,7 +775,7 @@ def test_imported_opportunity_prevents_duplicate_analysis_without_run_history() 
 
 def test_rate_limit_response_has_trace_and_security_headers(monkeypatch) -> None:
     monkeypatch.setattr(settings, "rate_limit_per_minute", 0)
-    response = client.get("/health", headers={"X-Request-ID": "rate-limit-test"})
+    response = client.get("/api/v1/stores", headers={"X-Request-ID": "rate-limit-test"})
 
     assert response.status_code == 429
     assert response.json()["request_id"] == "rate-limit-test"
