@@ -363,6 +363,62 @@ def test_gemini_conversation_report_provider_parses_structured_output(monkeypatc
     assert request["json"]["generationConfig"]["responseMimeType"] == "application/json"
 
 
+def test_daily_report_falls_back_to_groq_when_gemini_is_unreachable(monkeypatch) -> None:
+    from app.providers import ai
+
+    monkeypatch.setattr(settings, "demo_mode", False)
+    monkeypatch.setattr(settings, "ai_provider", "gemini")
+    monkeypatch.setattr(settings, "gemini_api_key", "gemini-test-key")
+    monkeypatch.setattr(settings, "groq_api_key", "groq-test-key")
+
+    def fail_gemini(*_args, **_kwargs):
+        raise RuntimeError("Gemini report service could not be reached.")
+
+    class Message:
+        content = json.dumps({
+            "summary": "Four conversations were recorded.",
+            "findings": ["No POS transactions were recorded."],
+            "confidence": 0.75,
+        })
+
+    class Choice:
+        message = Message()
+
+    class Completion:
+        choices = [Choice()]
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.config = kwargs
+
+    monkeypatch.setattr(ai, "_gemini_generate_json", fail_gemini)
+    monkeypatch.setattr("openai.OpenAI", FakeClient)
+    monkeypatch.setattr(ai, "groq_chat_completion", lambda *_args, **_kwargs: Completion())
+
+    result = ai.summarize_daily_report({"metrics": {"conversations": 4}})
+
+    assert result["provider"] == "groq"
+    assert result["status"] == "completed"
+    assert result["summary"] == "Four conversations were recorded."
+    assert result["findings"] == ["No POS transactions were recorded."]
+
+
+def test_mongo_filter_translates_sql_like_and_ilike_patterns() -> None:
+    import re
+
+    from sqlalchemy import String, column
+
+    from app.database import _expression_filter
+
+    like_filter = _expression_filter(column("label", String).like("report_"))["label"]
+    assert re.fullmatch(like_filter["$regex"], "reportx")
+    assert not re.fullmatch(like_filter["$regex"], "reportxy")
+
+    ilike_filter = _expression_filter(column("label", String).ilike("REPORT%"))["label"]
+    assert ilike_filter["$options"] == "i"
+    assert re.fullmatch(ilike_filter["$regex"], "report daily", flags=re.IGNORECASE)
+
+
 def test_conversation_report_falls_back_to_groq_when_gemini_fails(monkeypatch) -> None:
     from app.providers import ai
 

@@ -48,7 +48,10 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 720
 
     model_config = SettingsConfigDict(
-        env_file=str(Path(__file__).resolve().parents[2] / ".env"),
+        env_file=(
+            str(Path(__file__).resolve().parents[2] / ".env"),
+            str(Path(__file__).resolve().parents[1] / ".env"),
+        ),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",

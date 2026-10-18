@@ -41,6 +41,10 @@ If Render assigns different `onrender.com` hostnames because those names are alr
 
 Required environment values are declared in `render.yaml`. The only value you must provide manually is `MONGODB_URI`; the JWT/session secrets are generated. Keep `APP_ENV=development` and `DEMO_MODE=true` for this free demo deployment.
 
+Daily report summaries use Gemini first and fall back to Groq if Gemini is unavailable. The Blueprint declares `GEMINI_API_KEY` and `GROQ_API_KEY` as secret environment values (`sync: false`), so set them in the Render API service's Environment settings and redeploy; the local `backend/.env` file is never deployed. The Groq fallback only works when `GROQ_API_KEY` is set on that service. Daily reports also require `DEMO_MODE=false` and live reportable data; do not disable demo mode while the service is using seeded/demo records or mock POS data.
+
+If a provider key has been pasted into chat, committed, or otherwise shared, revoke it and create a replacement before adding the replacement to Render or a local ignored `.env` file.
+
 ### Frontend Static Site
 
 - Repository: `inforanaaliraza-code/Store-listen`

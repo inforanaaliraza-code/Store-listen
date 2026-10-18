@@ -424,6 +424,54 @@ def _coerce_conversation_report(result: dict, provider: str) -> ConversationRepo
     )
 
 
+def _groq_daily_summary(report: dict) -> DailyAnalysisResult:
+    key = (settings.groq_api_key or "").strip()
+    if not key:
+        raise RuntimeError("GROQ_API_KEY is missing.")
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError("Install backend requirements to enable Groq daily analysis.") from exc
+
+    client = OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1", timeout=30)
+    completion = groq_chat_completion(
+        client,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Summarize only these retail daily aggregate metrics. Do not infer why sales were missed or score "
+                    "employee quality. Distinguish missing POS data from zero sales. Return JSON with summary (string), "
+                    "findings (string array), and confidence (number from 0 to 1). Keep conclusions evidence-based."
+                ),
+            },
+            {"role": "user", "content": json.dumps(report, ensure_ascii=True)},
+        ],
+    )
+    content = completion.choices[0].message.content if completion.choices else ""
+    if not content:
+        raise RuntimeError("Groq returned an empty daily analysis.")
+    try:
+        result = json.loads(content)
+        if not isinstance(result, dict):
+            raise ValueError("Expected a JSON object.")
+        summary = result["summary"]
+        findings = result["findings"]
+        confidence = float(result["confidence"])
+        if not isinstance(summary, str) or not isinstance(findings, list):
+            raise ValueError("Invalid daily analysis fields.")
+        if any(not isinstance(item, str) for item in findings):
+            raise ValueError("Daily analysis findings must be strings.")
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Groq returned invalid daily analysis JSON.") from exc
+    return DailyAnalysisResult(
+        summary=summary[:2000],
+        findings=[item[:500] for item in findings[:12]],
+        confidence=max(0.0, min(1.0, confidence)),
+    )
+
+
 def _groq_report_json(system_instruction: str, input_data: dict) -> dict:
     key = (settings.groq_api_key or "").strip()
     if not key:
@@ -504,8 +552,19 @@ def summarize_daily_report(report: dict) -> dict:
     provider_name = settings.ai_provider
     if provider_name == "mock":
         raise RuntimeError("Daily reports require a configured real AI provider; AI_PROVIDER=mock is not allowed.")
-    provider = get_ai_provider(provider_name)
-    result = provider.summarize_day(report)
+    if provider_name == "gemini":
+        try:
+            result = get_ai_provider(provider_name).summarize_day(report)
+        except Exception as gemini_error:
+            if not (settings.groq_api_key or "").strip():
+                raise
+            try:
+                result = _groq_daily_summary(report)
+            except Exception as groq_error:
+                raise RuntimeError("Gemini daily analysis failed and Groq fallback also failed.") from groq_error
+            provider_name = "groq"
+    else:
+        result = get_ai_provider(provider_name).summarize_day(report)
     return {
         "summary": result.summary,
         "findings": result.findings,

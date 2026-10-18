@@ -20,5 +20,6 @@ npm run dev
 ```
 
 The API requires MongoDB Atlas and is available at `http://localhost:8000`; health check: `http://localhost:8000/health`.
+Settings load `.env` from the repository root and then `backend/.env`; values in `backend/.env` override root values. These files are local-only and are not deployed to Render.
 
 Run backend tests with `npm run test` from this directory or `npm test` from the repository root.

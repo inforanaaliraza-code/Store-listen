@@ -1,6 +1,7 @@
 from collections.abc import Generator, Iterable
 from copy import deepcopy
 from datetime import UTC, datetime
+import re
 from typing import Any
 
 from pymongo import MongoClient
@@ -47,6 +48,17 @@ def _expression_filter(expression: Any) -> dict[str, Any]:
             value = right.value
         else:
             value = {"true": True, "false": False, "null": None}.get(right.__visit_name__)
+        if expression.operator in {operators.like_op, operators.ilike_op}:
+            if not isinstance(value, str):
+                raise TypeError("MongoDB LIKE filters require a string pattern")
+            regex = "".join(
+                ".*" if character == "%" else "." if character == "_" else re.escape(character)
+                for character in value
+            )
+            criterion = {"$regex": f"^{regex}$"}
+            if expression.operator is operators.ilike_op:
+                criterion["$options"] = "i"
+            return {field: criterion}
         operator_map = {
             operators.eq: "$eq",
             operators.ne: "$ne",
