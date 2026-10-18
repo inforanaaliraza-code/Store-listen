@@ -678,9 +678,13 @@ async function refreshLiveCoaching(capture, segment) {
     );
     if (state.capture !== capture || capture.coachingRequestId !== requestId) return;
     renderLiveCoaching(payload);
-  } catch {
+  } catch (error) {
     if (capture.coachingRequestId === requestId) {
-      renderLiveCoaching(null, 'Suggestions temporarily unavailable');
+      const detail = error instanceof Error ? error.message.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+      setText(
+        '#liveCoachingStatus',
+        detail ? `Suggestions unavailable: ${detail}` : 'Suggestions unavailable; transcript is still saved.',
+      );
     }
   }
 }

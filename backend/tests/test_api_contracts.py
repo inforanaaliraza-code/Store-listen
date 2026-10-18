@@ -539,6 +539,47 @@ def test_gemini_provider_remains_compatible_with_live_clip_analysis(monkeypatch)
     assert result.confidence == 0.84
 
 
+def test_gemini_live_analysis_falls_back_to_groq(monkeypatch) -> None:
+    from app.providers import ai
+
+    monkeypatch.setattr(settings, "ai_provider", "gemini")
+    monkeypatch.setattr(settings, "gemini_api_key", "gemini-test-key")
+    monkeypatch.setattr(settings, "groq_api_key", "groq-test-key")
+
+    gemini_call = {}
+
+    def fail_gemini(*_args, **kwargs):
+        gemini_call.update(kwargs)
+        raise RuntimeError("Gemini report service could not be reached.")
+
+    def groq_result(_instruction, _input):
+        return {
+            "intent": "purchase_accessory",
+            "product": "charger",
+            "opportunity": True,
+            "recommendation": "Ask which device the charger is for.",
+            "confidence": 0.81,
+            "opportunity_type": "potential",
+            "objections": [],
+            "employee_response_quality": "unknown",
+        }
+
+    monkeypatch.setattr(ai, "_gemini_generate_json", fail_gemini)
+    monkeypatch.setattr(ai, "_groq_generate_json", groq_result)
+
+    result = ai.get_ai_provider("gemini").analyze(
+        "I need a charger.",
+        "I need a charger.",
+        "en",
+        "unknown",
+    )
+
+    assert result.product == "charger"
+    assert result.recommendation == "Ask which device the charger is for."
+    assert result.confidence == 0.81
+    assert gemini_call["timeout"] == 8.0
+
+
 def test_conversation_report_persists_for_unattributed_transcript(monkeypatch) -> None:
     from app import api
     from app.providers.ai import ConversationReport
