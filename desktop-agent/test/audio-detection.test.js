@@ -30,8 +30,8 @@ test('voice gate opens quickly and streams short live clips', () => {
   assert.ok(config.endFrames <= 6, 'end the phrase after a short pause');
   assert.ok(config.silenceHangoverMs <= 450, 'do not hold a finished phrase');
   assert.equal(config.livePreviewEnabled, true, 'words stream live while the person is still speaking');
-  assert.ok(config.previewIntervalMs <= 600, 'live words refresh about twice a second');
-  assert.ok(config.maxSegmentMs <= 8000 && config.maxSegmentMs >= 3000, 'a phrase is long enough to transcribe accurately');
+  assert.ok(config.previewIntervalMs <= 1100, 'live preview requests are throttled to protect transcription latency');
+  assert.ok(config.maxSegmentMs <= 5000 && config.maxSegmentMs >= 3000, 'final audio chunks are capped at five seconds');
   assert.ok(config.minClipMs >= 400 && config.minClipMs <= 700, 'skip noise blips, keep real words');
   assert.ok(config.minVoicedMs >= 200 && config.minVoicedMs <= 400, 'a clip needs real voiced time before it is uploaded');
   assert.ok(config.minRms <= 0.008, 'soft store speech must still open the gate');

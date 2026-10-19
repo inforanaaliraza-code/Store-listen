@@ -4,6 +4,7 @@ import Link from '@/lib/router-link';
 import { useParams } from '@/lib/router-hooks';
 import { useEffect, useState } from 'react';
 import { apiBlob, apiGet, apiPatch, apiPost, type Conversation } from '../../../../lib/api';
+import { englishTranscriptText } from '../../../../lib/english-transcript';
 
 type Segment = { id: string; speaker_id: string; speaker_label?: string; speaker_role?: string; employee_id?: string | null; language: string; original_text: string; translated_text: string | null; english_text?: string; confidence: number; start_time: number };
 type Recording = { id: string; captured_at: string; duration_seconds: number; byte_size: number; sequence: number; speaker_role: string; playback_path: string };
@@ -277,9 +278,11 @@ export default function ConversationDetailPage() {
                   ? 'Speaker'
                   : (segment.speaker_label || (speakerRole === 'customer' ? 'Customer' : speakerRole === 'employee' ? 'Representative' : 'Speaker'));
                 const customer = speakerRole === 'customer';
-                const englishText = segment.english_text || (segment.language.toLowerCase().split('-')[0] === 'en'
-                  ? segment.original_text
-                  : 'English translation unavailable');
+                const englishText = englishTranscriptText(
+                  segment.original_text,
+                  segment.english_text || segment.translated_text,
+                  segment.language,
+                );
                 return <div className={`analysis-message ${customer ? 'customer' : 'representative'}`} key={segment.id}>
                   <div className="analysis-message-meta">
                     <span className="analysis-message-speaker"><i>{customer ? 'C' : speakerRole === 'employee' ? 'R' : '?'}</i>{speaker}</span>

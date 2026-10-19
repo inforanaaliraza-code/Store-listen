@@ -266,7 +266,7 @@ class CloudSpeechProvider(SpeechProvider):
     def _openai_client(self, config: dict[str, str]):
         from openai import OpenAI
 
-        client_kwargs: dict = {"api_key": config["api_key"]}
+        client_kwargs: dict = {"api_key": config["api_key"], "timeout": 10.0, "max_retries": 0}
         if config["base_url"]:
             client_kwargs["base_url"] = config["base_url"]
         return OpenAI(**client_kwargs)
@@ -290,7 +290,9 @@ class CloudSpeechProvider(SpeechProvider):
                 kwargs["language"] = language
             try:
                 result = client.audio.transcriptions.create(**kwargs)
-            except Exception:
+            except Exception as exc:
+                if getattr(exc, "status_code", None) not in {400, 422} or "response_format" not in str(exc).lower():
+                    raise
                 audio_file.seek(0)
                 bare = {"model": model, "file": (filename, audio_file), "temperature": 0}
                 if language:
@@ -375,16 +377,13 @@ class CloudSpeechProvider(SpeechProvider):
         original, language = _finalize_transcript(original, detected, hint)
         translated = original
         # Live previews skip EN gloss so words appear immediately; finals still translate Spanish.
-        if not fast and language != "en":
-            translated = self._translate_to_english(client, config, path, original, language)
-            if not translated:
-                try:
-                    translated = self._chat_translate_to_english(client, config, original, language)
-                except Exception:
-                    translated = ""
-            if language == "es" and translated:
+        needs_translation = language != "en" or looks_like_spanish(original)
+        if not fast and needs_translation:
+            translation_language = "es" if looks_like_spanish(original) else language
+            translated = self._translate_to_english(client, config, path, original, translation_language)
+            if translation_language == "es" and translated:
                 translated = polish_spanish_translation(original, translated)
-            if not is_usable_english_translation(original, translated, language):
+            if not is_usable_english_translation(original, translated, translation_language):
                 translated = ""
 
         self.name = config["label"] or "cloud"

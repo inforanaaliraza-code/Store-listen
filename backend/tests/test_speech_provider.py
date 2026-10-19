@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import app.providers.speech as speech_module
 from app.providers.speech import (
     GROQ_DEFAULT_MODEL,
@@ -73,6 +75,47 @@ def test_openai_alias_uses_cloud_provider(monkeypatch) -> None:
     _clear_provider_cache()
     assert resolve_speech_provider_name("openai") == "cloud"
     assert get_speech_provider("openai").name == "openai"
+
+
+def test_cloud_provider_translates_mixed_spanish_once_even_when_stt_reports_english(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(speech_module.settings, "speech_provider", "auto")
+    monkeypatch.setattr(speech_module.settings, "groq_api_key", "groq-test-key")
+    monkeypatch.setattr(speech_module.settings, "speech_api_key", "")
+    monkeypatch.setattr(speech_module.settings, "ai_api_key", "")
+    monkeypatch.setattr(speech_module.settings, "speech_cloud_model", "whisper-large-v3")
+    calls = {"transcription": 0, "translation": 0}
+
+    class Transcriptions:
+        def create(self, **_kwargs):
+            calls["transcription"] += 1
+            return SimpleNamespace(
+                text=(
+                    "What is the accent of Barcelona in Spanish? I think it is more open. "
+                    "Yo me acuerdo que fui un dia a Madrid con amigas, que era con el core, "
+                    "y nos dijeron, eran bien los clientes de Madrid."
+                ),
+                language="en",
+            )
+
+    class Completions:
+        def create(self, **_kwargs):
+            calls["translation"] += 1
+            message = SimpleNamespace(content="I remember going to Madrid with friends; the customers there were very kind.")
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    client = SimpleNamespace(
+        audio=SimpleNamespace(transcriptions=Transcriptions()),
+        chat=SimpleNamespace(completions=Completions()),
+    )
+    monkeypatch.setattr(CloudSpeechProvider, "_openai_client", lambda _self, _config: client)
+    path = tmp_path / "mixed-spanish.webm"
+    path.write_bytes(b"fake audio")
+
+    result = CloudSpeechProvider().transcribe_file(path)
+
+    assert result.language == "es"
+    assert result.translated_text == "I remember going to Madrid with friends; the customers there were very kind"
+    assert calls == {"transcription": 1, "translation": 1}
 
 
 def test_mock_live_coaching_gives_a_careful_model_specific_reply():

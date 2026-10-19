@@ -692,13 +692,8 @@ async function refreshLiveCoaching(capture, segment) {
 function showLivePartial(segment) {
   const original = String(segment?.originalText || '').trim();
   if (!original || isClientJunkLive(original)) return;
-  const translated = String(segment?.translatedText || '').trim();
-  const language = String(segment?.language || 'en').toLowerCase().split('-')[0];
-  const english = language === 'en'
-    ? original
-    : String(segment?.englishText || '').trim()
-      || (transcriptTools.isEnglishTranslation?.(translated, original) ? translated : '');
-  if (!english) {
+  const english = transcriptTools.paragraphParts([{ segment }])[0]?.english || '';
+  if (!english || english === 'English translation pending') {
     clearLivePartial();
     return;
   }

@@ -416,6 +416,62 @@ def test_api_saves_non_english_speech_with_english_translation(monkeypatch):
             db.close()
 
 
+def test_audio_transcribe_reclassifies_mixed_spanish_and_returns_english(monkeypatch):
+    from app import api as api_module
+
+    mixed_text = (
+        "What is the accent of Barcelona in Spanish? I think it is more open. "
+        "Yo me acuerdo que fui un dia a Madrid con amigas, que era con el core, "
+        "y nos dijeron, eran bien los clientes de Madrid."
+    )
+    english_text = "I remember going to Madrid with friends; the customers there were very kind"
+
+    class MixedSpeechProvider:
+        name = "test-mixed-speech"
+
+        def transcribe_file(self, audio_path: str, language_hint: str | None = None) -> SpeechResult:
+            return SpeechResult(mixed_text, "en", english_text, 0.95, True)
+
+    monkeypatch.setattr(api_module, "get_speech_provider", lambda _name: MixedSpeechProvider())
+    client.cookies.clear()
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@storelisten.demo", "password": "StoreListen!2026"},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['token']}"}
+    session = client.post("/api/v1/audio/sessions", headers=headers, json={"store_id": "store-001"})
+    conversation_id = session.json()["conversation_id"]
+
+    try:
+        response = client.post(
+            "/api/v1/audio/transcribe",
+            headers=headers,
+            data={"store_id": "store-001", "conversation_id": conversation_id},
+            files={"audio": ("mixed-spanish.webm", b"fake mixed audio", "audio/webm")},
+        )
+        assert response.status_code == 200, response.text
+        segment = response.json()["segment"]
+        assert segment["language"] == "es"
+        assert segment["englishText"] == english_text
+
+        live_transcript = client.get(f"/api/v1/conversations/{conversation_id}/transcript", headers=headers)
+        assert live_transcript.status_code == 200
+        assert live_transcript.json()["segments"][0]["english_text"] == english_text
+    finally:
+        db = SessionLocal()
+        try:
+            recordings = db.query(AudioRecording).filter(AudioRecording.conversation_id == conversation_id).all()
+            for recording in recordings:
+                delete_audio_clip(recording.storage_key)
+                db.delete(recording)
+            db.query(TranscriptSegment).filter(TranscriptSegment.conversation_id == conversation_id).delete(synchronize_session=False)
+            db.query(ConversationParticipant).filter(ConversationParticipant.conversation_id == conversation_id).delete(synchronize_session=False)
+            db.query(Conversation).filter(Conversation.id == conversation_id).delete(synchronize_session=False)
+            db.commit()
+        finally:
+            db.close()
+
+
 def test_live_coaching_uses_recent_transcript_and_returns_staff_guidance(monkeypatch):
     from app import api as api_module
     from app.providers.ai import AnalysisResult

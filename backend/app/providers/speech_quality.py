@@ -11,6 +11,7 @@ from langdetect import DetectorFactory, LangDetectException, detect_langs
 
 # Store capture only supports English and Spanish.
 SUPPORTED_LANGUAGES = frozenset({"en", "es"})
+ENGLISH_TRANSLATION_PENDING = "English translation pending"
 
 # Classic Whisper empty-audio / YouTube / multilingual filler.
 _HALLUCINATION_EXACT = frozenset(
@@ -213,38 +214,16 @@ def looks_like_spanish(text: str) -> bool:
     phrase = _normalize_phrase(text)
     if phrase in _ALLOWED_SHORT_ES:
         return True
-    spanish_hits = (
-        "hola",
-        "gracias",
-        "quiero",
-        "necesito",
-        "tiene",
-        "tienen",
-        "cuanto",
-        "cuánto",
-        "por favor",
-        "buenos",
-        "buenas",
-        "cargador",
-        "precio",
-        "donde",
-        "dónde",
-        "telefono",
-        "teléfono",
-        "iphone",
-        "ayuda",
-        "puedo",
-        "esta",
-        "está",
-        "ese",
-        "esa",
-        "como",
-        "cómo",
-        "adios",
-        "adiós",
-    )
     words = set(_WORD_RE.findall(lowered))
-    return sum(1 for token in spanish_hits if token in words or token in lowered) >= 2
+    spanish_hits = {
+        "hola", "gracias", "quiero", "necesito", "tiene", "tienen", "cuanto", "por", "favor",
+        "buenos", "buenas", "cargador", "precio", "donde", "telefono", "ayuda", "puedo", "esta",
+        "ese", "esa", "como", "adios", "fui", "dia", "amigas", "amigos", "dijeron", "eran",
+        "clientes", "nos", "somos", "estamos", "porque", "pero", "tambien", "bien", "mucho",
+        "ahora", "quieres", "tenemos", "tenia", "tengo", "puede", "puedes", "necesita", "cuesta",
+        "yo", "que", "con", "del", "los", "las", "una", "unos", "unas", "porfavor",
+    }
+    return len(words & spanish_hits) >= 2
 
 
 def looks_like_foreign_non_store(text: str) -> bool:
@@ -444,12 +423,13 @@ def detect_transcript_language(text: str, reported_language: str | None = None, 
 
 def english_display_text(original: str, translated: str | None, source_language: str | None) -> str:
     source = str(original or "").strip()
-    if (source_language or "").lower().split("-")[0] == "en":
+    language = (source_language or "").lower().split("-")[0]
+    if language == "en" and not looks_like_spanish(source):
         return source
     translation = str(translated or "").strip()
     if is_usable_english_translation(source, translation, source_language):
         return translation
-    return "English translation unavailable"
+    return ENGLISH_TRANSLATION_PENDING
 
 
 def polish_spanish_translation(original: str, translated: str) -> str:

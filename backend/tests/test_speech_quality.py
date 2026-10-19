@@ -84,7 +84,7 @@ def test_non_english_translation_rejects_foreign_echo_and_requires_english():
     assert not is_usable_english_translation("नमस्ते", "नमस्ते", "hi")
     assert is_usable_english_translation("Hola", "Hello", "es")
     assert english_display_text("Hello there", "Hello there", "en") == "Hello there"
-    assert english_display_text("Bonjour", "", "fr") == "English translation unavailable"
+    assert english_display_text("Bonjour", "", "fr") == "English translation pending"
 
 
 def test_detects_source_language_when_transcription_provider_omits_it():
@@ -94,6 +94,22 @@ def test_detects_source_language_when_transcription_provider_omits_it():
     assert detect_transcript_language("Hola, necesito un cargador") == "es"
     assert detect_transcript_language("Je voudrais un téléphone, s'il vous plaît", "en") == "fr"
     assert detect_transcript_language("नमस्ते, मुझे फ़ोन चार्जर चाहिए", "en") == "hi"
+
+
+def test_detects_spanish_inside_mixed_transcript_even_when_provider_says_english():
+    mixed = (
+        "What is the accent of Barcelona in Spanish? I think it is more open. "
+        "Yo me acuerdo que fui un dia a Madrid con amigas, que era con el core, "
+        "y nos dijeron, eran bien los clientes de Madrid."
+    )
+    english = "I remember going to Madrid with friends; the customers there were very kind."
+
+    assert detect_transcript_language(mixed, "en") == "es"
+    assert english_display_text(mixed, english, "en") == english
+
+
+def test_untranslated_foreign_text_never_uses_the_old_unavailable_sentinel():
+    assert english_display_text("Hola, necesito un cargador", "", "es") == "English translation pending"
 
 
 def test_whisper_segments_marked_as_silence_are_dropped():

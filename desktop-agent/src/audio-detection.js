@@ -12,11 +12,11 @@
     endFrames: 6,
     silenceHangoverMs: 380,
     // One whole phrase per final upload; words stream live while the person is still talking.
-    maxSegmentMs: 7000,
+    maxSegmentMs: 5000,
     minClipMs: 500,
     // Real speech must last this long inside a clip, otherwise it was a door slam or a cough.
     minVoicedMs: 280,
-    previewIntervalMs: 500,
+    previewIntervalMs: 1000,
     livePreviewEnabled: true,
   });
 

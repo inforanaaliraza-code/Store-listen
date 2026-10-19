@@ -90,6 +90,10 @@
     'adiós', 'cargador', 'precio', 'donde', 'dónde', 'telefono', 'teléfono', 'ayuda',
     'puedo', 'esta', 'está', 'tiene', 'tienen', 'por',
   ]);
+  const DISTINCTIVE_SPANISH_WORDS = new Set([
+    'fui', 'dia', 'amiga', 'amigas', 'amigo', 'amigos', 'dijeron', 'eran', 'clientes',
+    'tenemos', 'necesito', 'quiero', 'puedes', 'cuesta', 'ahora', 'porque', 'tambien',
+  ]);
   const ENGLISH_WORDS = new Set([
     'hello', 'hi', 'hey', 'i', 'im', 'i\'m', 'we', 'you', 'the', 'this', 'that',
     'need', 'want', 'have', 'please', 'yes', 'no', 'charger', 'phone', 'price',
@@ -122,6 +126,7 @@
     const words = phrase.split(' ').filter(Boolean);
     const spanishCount = words.filter((word) => SPANISH_WORDS.has(word)).length;
     const englishCount = words.filter((word) => ENGLISH_WORDS.has(word)).length;
+    if (words.filter((word) => DISTINCTIVE_SPANISH_WORDS.has(word)).length >= 2) return true;
     if (spanishCount >= 2 && spanishCount > englishCount) return true;
     if ((language || '').toLowerCase() === 'es' && englishCount === 0) return true;
     if ((language || '').toLowerCase() === 'es' && spanishCount >= 1 && spanishCount >= englishCount) return true;
@@ -137,11 +142,14 @@
       const translated = String(segment.translatedText || entry.translated || '').trim();
       const vettedEnglish = String(segment.englishText || entry.englishText || '').trim();
       const language = String(segment.language || entry.language || 'en').toLowerCase();
-      const english = language.split('-')[0] === 'en'
-        ? original
-        : vettedEnglish || (isEnglishTranslation(translated, original)
-          ? translated
-          : 'English translation unavailable');
+      const needsTranslation = language.split('-')[0] !== 'en' || isSpanishUtterance(original, language);
+      const english = needsTranslation
+        ? (isEnglishTranslation(vettedEnglish, original)
+          ? vettedEnglish
+          : isEnglishTranslation(translated, original)
+            ? translated
+            : 'English translation pending')
+        : original;
       return { kind: 'en', original, english };
     }).filter(Boolean);
   }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from '@/lib/router-link';
 import { apiGet, apiGetWithRetry, getToken, WS_URL, openStoreSocket, wakeApi, type Store } from '../../../lib/api';
+import { englishTranscriptText, ENGLISH_TRANSLATION_PENDING } from '../../../lib/english-transcript';
 
 type LiveEvent = {
   event: string;
@@ -96,25 +97,8 @@ function formatParagraphTime(value: number) {
   return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date(value));
 }
 
-function looksLikeSpanishText(text: string) {
-  if (/[¿¡ñáéíóúü]/i.test(text || '')) return true;
-  const lowered = (text || '').toLowerCase();
-  const hits = ['hola', 'gracias', 'señor', 'senor', 'tenemos', 'producto', 'necesito', 'cuanto', 'cuánto', 'por favor', 'dolares', 'dólares', 'buenos', 'buenas', 'adios', 'adiós'];
-  return hits.some((token) => lowered.includes(token));
-}
-
 function paragraphSpoken(lines: Line[]) {
   return lines.map((line) => line.original).join(' ').trim();
-}
-
-function englishTranscriptText(original: string, englishText: string | null | undefined, language: string) {
-  const source = original.trim();
-  if (language.toLowerCase().split('-')[0] === 'en') return source;
-  const english = englishText?.trim() || '';
-  if (english && english !== source) {
-    return english;
-  }
-  return 'English translation unavailable';
 }
 
 function storeLocation(store?: Store | null) {
@@ -359,11 +343,8 @@ export default function LivePage() {
         const original = event.originalText || '';
         const language = event.language?.toLowerCase().split('-')[0] || 'en';
         const english = event.englishText?.trim() || '';
-        const partial = language === 'en'
-          ? original
-          : english && english !== original
-            ? english
-            : 'Translating conversation to English…';
+        const transcript = englishTranscriptText(original, english, language);
+        const partial = transcript === ENGLISH_TRANSLATION_PENDING ? 'Translating conversation to English…' : transcript;
         return { ...current, [storeId]: { ...existing, partial, status: 'LIVE', conversationId: event.conversationId || existing.conversationId } };
       }
       if (!line) return current;

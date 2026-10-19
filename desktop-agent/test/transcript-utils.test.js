@@ -7,6 +7,7 @@ const {
   formatParagraphPlain,
   groupEntriesIntoParagraphs,
   normalizeSessions,
+  paragraphParts,
   pdfHtml,
   transcriptText,
 } = require('../src/transcript-utils');
@@ -51,6 +52,22 @@ test('English speech does not get an EN translation line even if it contains gra
     { segment: { originalText: mixed, translatedText: mixed, language: 'en' } },
   ]);
   assert.equal(englishOnly, '');
+});
+
+test('mixed Spanish is shown only as English even when speech detection reports English', () => {
+  const mixed = 'What is the accent of Barcelona? Yo me acuerdo que fui un dia a Madrid con amigas, y nos dijeron que eran clientes.';
+  const translated = 'I remember going to Madrid with friends, and they told us those customers were kind.';
+  const [translatedPart] = paragraphParts([{ segment: {
+    originalText: mixed,
+    translatedText: translated,
+    englishText: translated,
+    language: 'en',
+  } }]);
+  const [pendingPart] = paragraphParts([{ segment: { originalText: mixed, language: 'en' } }]);
+
+  assert.equal(translatedPart.english, translated);
+  assert.equal(pendingPart.english, 'English translation pending');
+  assert.doesNotMatch(pendingPart.english, /translation unavailable|Madrid|amigas/i);
 });
 
 test('TXT export uses paragraph flow with staff English line', () => {

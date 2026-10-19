@@ -52,19 +52,17 @@ export default function ReportsIndex() {
 
   return (
     <div className="owner-page">
-      <div className="heading"><div><span className="eyebrow">SHOP OWNER</span><h1 className="serif">Reports</h1><p>Daily briefings and performance rollups from conversations and POS data.</p></div>
+      <div className="heading"><div><span className="eyebrow">SHOP OWNER</span><h1 className="serif">Reports</h1><p>Daily AI briefings from conversations and POS data.</p></div>
         <label className="owner-select-label">Store<select value={storeId} onChange={(event) => setStoreId(event.target.value)} aria-label="Choose store">{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>
       </div>
       {error ? <div className="error" role="alert">{error}</div> : null}
       <section className="owner-report-types">
-        {['daily', 'weekly', 'monthly'].map((period) => (
-          <Link className="owner-report-type" key={period} href={`/reports/${period}${storeId ? `?store_id=${encodeURIComponent(storeId)}` : ''}`}>
-            <span className="eyebrow">{period.toUpperCase()}</span>
-            <h2>{period[0].toUpperCase() + period.slice(1)} report</h2>
-            <p>{period === 'daily' ? 'Briefing, conversation signals, sales, and actions for a business day.' : `Compare store conversations and opportunity outcomes by ${period === 'weekly' ? 'week' : 'month'}.`}</p>
-            <span>Open report →</span>
-          </Link>
-        ))}
+        <Link className="owner-report-type" href={`/reports/daily${storeId ? `?store_id=${encodeURIComponent(storeId)}` : ''}`}>
+          <span className="eyebrow">DAILY</span>
+          <h2>Daily report</h2>
+          <p>Briefing, conversation signals, sales, and actions for a business day.</p>
+          <span>Open report →</span>
+        </Link>
       </section>
       <section className="owner-panel owner-history-panel">
         <div className="owner-panel-heading"><div><span className="eyebrow">SAVED BRIEFINGS</span><h2>Report history</h2><p>Generated daily reports for {stores.find((store) => store.id === storeId)?.name ?? 'this store'}.</p></div></div>

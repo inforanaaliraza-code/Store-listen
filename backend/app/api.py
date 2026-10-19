@@ -88,7 +88,12 @@ from app.providers.speech import (
     normalize_supported_language,
     resolve_speech_provider_name,
 )
-from app.providers.speech_quality import english_display_text, is_recent_duplicate
+from app.providers.speech_quality import (
+    ENGLISH_TRANSLATION_PENDING,
+    detect_transcript_language,
+    english_display_text,
+    is_recent_duplicate,
+)
 from app.security import create_access_token, current_user, decode_token, hash_device_secret, new_device_secret, verify_password
 from app.services.demo_live import run_live_demo
 from app.services.events import hub
@@ -1423,6 +1428,7 @@ async def preview_audio_transcription(
                 "transcription_ms": 0,
                 "preview_status": "busy",
             }
+            result.language = detect_transcript_language(result.original_text, result.language, language_hint)
     except (NoSpeechDetected, UnsupportedLanguageDetected):
         return {"segment": None, "preview_sequence": preview_sequence, "transcription_ms": round((perf_counter() - started) * 1000)}
     except RuntimeError as exc:
@@ -1433,9 +1439,8 @@ async def preview_audio_transcription(
         except FileNotFoundError:
             pass
 
-    if result.language != "en" and (
-        not result.translated_text or result.translated_text.strip() == result.original_text.strip()
-    ):
+    english_text = english_display_text(result.original_text, result.translated_text, result.language)
+    if english_text == ENGLISH_TRANSLATION_PENDING:
         return {
             "segment": None,
             "preview_sequence": preview_sequence,
@@ -1455,7 +1460,7 @@ async def preview_audio_transcription(
         "language": result.language,
         "originalText": result.original_text,
         "translatedText": result.translated_text,
-        "englishText": english_display_text(result.original_text, result.translated_text, result.language),
+        "englishText": english_text,
         "confidence": result.confidence,
         "isFinal": False,
         "source": f"{provider.name}_preview",
@@ -1567,7 +1572,9 @@ async def transcribe_audio(
                 audio_file.flush()
             result = await _transcribe_audio_file(provider, temp_path, language_hint, wait=True)
             transcription_ms = round((perf_counter() - transcription_started) * 1000)
-            detected_language = normalize_supported_language(result.language)
+            detected_language = normalize_supported_language(
+                detect_transcript_language(result.original_text, result.language, language_hint)
+            )
             if detected_language is None:
                 raise UnsupportedLanguageDetected(result.language or "und")
             result.language = detected_language
@@ -1801,7 +1808,7 @@ async def live_coaching_suggestions(
         english_display_text(segment.original_text, segment.translated_text, segment.language)
         for segment in reversed(segments)
     ]
-    context_lines = [line for line in context_lines if line and line != "English translation unavailable"]
+    context_lines = [line for line in context_lines if line and line != ENGLISH_TRANSLATION_PENDING]
     if not context_lines:
         raise HTTPException(409, "No English conversation text is ready for coaching yet.")
 

@@ -3,6 +3,7 @@
 import Link from '@/lib/router-link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiGet, getToken, openStoreSocket, type DashboardSummary, WS_URL } from '../../../lib/api';
+import { englishTranscriptText, ENGLISH_TRANSLATION_PENDING } from '../../../lib/english-transcript';
 
 type Recommendation = { id: string; title: string; message: string; confidence: number; store_id: string };
 type LiveLine = { id: string; storeId: string; speaker: string; text: string; translation?: string; at: string };
@@ -122,11 +123,8 @@ export default function DashboardPage() {
               const sourceLanguage = event.language?.toLowerCase().split('-')[0] || 'en';
               const original = event.originalText.trim();
               const english = event.englishText?.trim() || '';
-              setLiveStatus(sourceLanguage === 'en'
-                ? original
-                : english && english !== original
-                  ? english
-                  : 'Translating conversation to English…');
+              const transcript = englishTranscriptText(original, english, sourceLanguage);
+              setLiveStatus(transcript === ENGLISH_TRANSLATION_PENDING ? 'Translating conversation to English…' : transcript);
             }
           }
           if (event.event === 'transcript.final' && event.originalText) {
@@ -134,9 +132,7 @@ export default function DashboardPage() {
             previewSequences.delete(conversationId);
             const original = event.originalText.trim();
             const sourceLanguage = event.language?.toLowerCase().split('-')[0] || 'en';
-            const english = sourceLanguage === 'en'
-              ? original
-              : event.englishText?.trim() || 'English translation unavailable';
+            const english = englishTranscriptText(original, event.englishText, sourceLanguage);
             const line: LiveLine = {
               id: event.segmentId || `${event.timestamp}-${Math.random()}`,
               storeId: event.storeId || storeId,
