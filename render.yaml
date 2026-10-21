@@ -1,85 +1,42 @@
 services:
   - type: web
     name: store-listen-api
-    runtime: python
+    runtime: node
     plan: free
     region: ohio
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /ready
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.13.4
+      - key: HOST
+        value: 0.0.0.0
       - key: APP_ENV
-        value: development
-      - key: DEBUG
-        value: "false"
+        value: production
       - key: DEMO_MODE
         value: "true"
       - key: MONGODB_URI
         sync: false
       - key: MONGO_DATABASE_NAME
-        value: storelisten_render_demo
+        value: storelisten
       - key: JWT_SECRET
         generateValue: true
-      - key: SESSION_SECRET
-        generateValue: true
-      - key: API_BASE_URL
-        value: https://store-listen-api-z8yb.onrender.com
-      - key: WEB_BASE_URL
-        value: https://store-listen-web-qkkv.onrender.com
       - key: CORS_ORIGINS
         value: https://store-listen-web-qkkv.onrender.com
       - key: CORS_ORIGIN_REGEX
         value: ^$
-      - key: AI_PROVIDER
-        value: gemini
-      - key: GEMINI_API_KEY
+      - key: DEEPGRAM_API_KEY
         sync: false
-      - key: GEMINI_MODEL
-        value: gemini-3.5-flash-lite
-      # Free fast STT: create a key at https://console.groq.com (no card needed).
-      # Without GROQ_API_KEY / AI_API_KEY, SPEECH_PROVIDER=auto falls back to local Whisper (minutes).
-      - key: GROQ_API_KEY
+      - key: DEEPL_API_KEY
         sync: false
-      - key: AI_API_KEY
-        sync: false
-      - key: SPEECH_API_KEY
-        sync: false
-      - key: SPEECH_PROVIDER
-        value: auto
-      - key: SPEECH_CLOUD_MODEL
-        value: whisper-large-v3
-      - key: WHISPER_TRANSLATE_SPANISH
-        value: "true"
-      - key: WHISPER_MODEL
-        value: tiny
-      - key: WHISPER_DEVICE
-        value: cpu
-      - key: WHISPER_COMPUTE_TYPE
-        value: int8
-      - key: WHISPER_BEAM_SIZE
-        value: "1"
-      - key: WHISPER_CPU_THREADS
-        value: "2"
-      - key: WHISPER_NUM_WORKERS
-        value: "1"
-      # Previews stay on; busy previews are skipped so free-tier health checks stay green.
-      - key: WHISPER_PREVIEW_ENABLED
-        value: "true"
-      - key: WHISPER_WARMUP_ON_START
-        value: "false"
-      - key: RATE_LIMIT_PER_MINUTE
-        value: "300"
       - key: POS_PROVIDER
         value: mock
       - key: STORAGE_PROVIDER
-        value: local
-      - key: AUDIO_STORAGE_DIR
-        value: /tmp/storelisten-audio
-      - key: REDIS_EVENT_BUS_ENABLED
-        value: "false"
+        value: gridfs
+      - key: AUDIO_RETENTION_DAYS
+        value: "7"
+      - key: TRANSCRIPT_RETENTION_DAYS
+        value: "30"
 
   - type: web
     runtime: static

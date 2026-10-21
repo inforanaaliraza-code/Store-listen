@@ -1,0 +1,55 @@
+import dotenv from 'dotenv';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const backendDirectory = path.dirname(fileURLToPath(import.meta.url));
+for (const envPath of [path.resolve(backendDirectory, '../.env'), path.resolve(backendDirectory, '../../.env')]) {
+  if (existsSync(envPath)) dotenv.config({ path: envPath, override: false });
+}
+
+const numberFromEnv = (name, fallback) => {
+  const parsed = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+export const config = Object.freeze({
+  appEnv: process.env.APP_ENV || 'development',
+  host: process.env.HOST || '127.0.0.1',
+  port: numberFromEnv('PORT', 8000),
+  mongoUri: process.env.MONGODB_URI || '',
+  mongoDatabaseName: process.env.MONGO_DATABASE_NAME || 'storelisten',
+  demoMode: process.env.DEMO_MODE === 'true',
+  aiProvider: 'rules',
+  speechProvider: 'deepgram',
+  posProvider: process.env.POS_PROVIDER || 'mock',
+  storageProvider: process.env.STORAGE_PROVIDER || 'local',
+  jwtSecret: process.env.JWT_SECRET || 'local-development-only-change-before-deploy',
+  deepgramApiKey: process.env.DEEPGRAM_API_KEY || '',
+  deeplApiKey: process.env.DEEPL_API_KEY || '',
+  deeplApiUrl: (process.env.DEEPL_API_URL || 'https://api-free.deepl.com').replace(/\/+$/, ''),
+  audioStorageDir: path.resolve(process.env.AUDIO_STORAGE_DIR || './storage/audio'),
+  audioRetentionDays: numberFromEnv('AUDIO_RETENTION_DAYS', 7),
+  transcriptRetentionDays: numberFromEnv('TRANSCRIPT_RETENTION_DAYS', 30),
+  corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+  corsOriginRegex: process.env.CORS_ORIGIN_REGEX || '^https://.*\\.ts\\.net$',
+});
+
+if (!['gridfs', 'local'].includes(config.storageProvider)) {
+  throw new Error('STORAGE_PROVIDER must be either "gridfs" or "local".');
+}
+if (config.appEnv === 'production' && config.jwtSecret.length < 32) {
+  throw new Error('JWT_SECRET must be at least 32 characters in production.');
+}
+if (config.appEnv === 'production' && (!process.env.JWT_SECRET || config.jwtSecret === 'local-development-only-change-before-deploy')) {
+  throw new Error('Set a unique JWT_SECRET before starting the backend in production.');
+}
+if (config.appEnv === 'production' && config.storageProvider !== 'gridfs') {
+  throw new Error('STORAGE_PROVIDER=gridfs is required in production for durable audio storage.');
+}
+if (config.appEnv === 'production' && !config.deepgramApiKey) {
+  throw new Error('DEEPGRAM_API_KEY is required in production.');
+}

@@ -7,8 +7,8 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $runner = Join-Path $PSScriptRoot "run_backend.ps1"
-if (-not (Get-Command py.exe -ErrorAction SilentlyContinue)) {
-    throw "Python launcher py.exe was not found. Install Python 3.13 and backend requirements first."
+if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
+    throw "Node.js was not found. Install Node.js 24 or later before registering API startup."
 }
 if (-not (Test-Path (Join-Path $repoRoot ".env"))) {
     throw "Repository .env is missing. Configure production backend settings before registering startup."
@@ -16,13 +16,13 @@ if (-not (Test-Path (Join-Path $repoRoot ".env"))) {
 
 Push-Location (Join-Path $repoRoot "backend")
 try {
-    $configurationJson = & py.exe -3.13 -c "import json; from app.config import settings; print(json.dumps({'app_env': settings.app_env, 'demo_mode': settings.demo_mode, 'mongodb_configured': bool(settings.mongodb_uri)}))"
-    if ($LASTEXITCODE -ne 0) { throw "Backend settings did not validate; no startup task was registered." }
+    $configurationJson = & node.exe --input-type=module -e "import { config } from './src/config.js'; console.log(JSON.stringify({ app_env: config.appEnv, demo_mode: config.demoMode, mongodb_configured: Boolean(config.mongoUri), deepgram_configured: Boolean(config.deepgramApiKey), jwt_configured: Boolean(process.env.JWT_SECRET), gridfs_configured: config.storageProvider === 'gridfs' }))"
+    if ($LASTEXITCODE -ne 0) { throw "Node backend settings did not validate; no startup task was registered." }
     $configuration = $configurationJson | ConvertFrom-Json
 } finally {
     Pop-Location
 }
-$productionReady = $configuration.app_env -eq "production" -and -not $configuration.demo_mode -and $configuration.mongodb_configured
+$productionReady = $configuration.app_env -eq "production" -and -not $configuration.demo_mode -and $configuration.mongodb_configured -and $configuration.deepgram_configured -and $configuration.jwt_configured -and $configuration.gridfs_configured
 if (-not $productionReady) {
     $privateDemoReady = $AllowPrivateTailnetDemo -and `
         $configuration.app_env -eq "development" -and `

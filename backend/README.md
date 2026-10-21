@@ -1,25 +1,25 @@
 # Backend
 
-FastAPI service for Store Listen.
+Node.js 24, Express, Mongoose, and WebSocket API for Store Listen. Mongo documents retain the existing collection names and `id` fields during migration.
 
-## From the repository root
-
-```powershell
-Copy-Item .env.example .env
-# Set MONGODB_URI and MONGO_DATABASE_NAME in .env.
-py -3.13 -m pip install -r backend/requirements.txt
-npm run dev --workspace backend
-```
-
-## From this directory
+## Local development
 
 ```powershell
-Copy-Item ..\.env.example ..\.env
-py -3.13 -m pip install -r requirements.txt
+Copy-Item ..\.env.example .env
+# Set MONGODB_URI, DEEPGRAM_API_KEY, and DEEPL_API_KEY in backend/.env.
+npm install
 npm run dev
 ```
 
-The API requires MongoDB Atlas and is available at `http://localhost:8000`; health check: `http://localhost:8000/health`.
-Settings load `.env` from the repository root and then `backend/.env`; values in `backend/.env` override root values. These files are local-only and are not deployed to Render.
+The API listens on `http://localhost:8000`. Health: `http://localhost:8000/health`; readiness: `http://localhost:8000/ready`.
+The Node service loads `backend/.env` first and then the repository-root `.env`; shell/Render environment variables take precedence. Never commit API keys.
 
-Run backend tests with `npm run test` from this directory or `npm test` from the repository root.
+Live transcription requires `DEEPGRAM_API_KEY`; Spanish-to-English translation uses optional `DEEPL_API_KEY`. Conversation analysis, coaching, and daily summaries use local phrase rules and verified database aggregates; they do not call a generative LLM. Treat phrase matches and opportunity labels as review signals, not proof of customer intent or employee performance. Daily reports state when live POS data is unavailable and never estimate revenue.
+
+Set `STORAGE_PROVIDER=gridfs` for deployment. Audio is stored in MongoDB GridFS and its metadata in MongoDB; production startup refuses local audio storage, missing Deepgram credentials, or a missing production JWT secret. `STORAGE_PROVIDER=local` is available only for local development and tests. Keep `DEMO_MODE=true` while using mock/demo records.
+
+Expired audio files and their metadata are removed in batches; expired transcript segments are also removed based on `TRANSCRIPT_RETENTION_DAYS`. The cleanup runs at startup and every 15 minutes. MongoDB GridFS and database quotas still need monitoring.
+
+Run Node backend contract tests from the repository root with `npm test --workspace backend`.
+
+The Node/Express API is the active backend. MongoDB is the system of record; Redis is not required by this service. Before switching a live deployment, configure the secrets and persistent MongoDB storage, run the Node test suite, and verify `/ready`, transcription, WebSocket updates, and daily reports against the deployed environment.

@@ -1,5 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 const transcriptTools = window.StoreListenTranscript;
+const liveAudio = window.StoreListenLiveAudio;
 const voiceDetection = window.StoreListenAudioDetection || {};
 const deviceHealth = window.StoreListenDeviceHealth;
 const { isDeviceSessionExpired } = window.StoreListenDeviceConfig;
@@ -978,22 +979,62 @@ async function uploadSegment(capture, blob, sequence, offset, duration) {
   });
   setHidden('#liveTranscriptPreview', true);
   setText('#liveTranscriptPreviewText', '');
-  if (response.segment) {
-    addTranscript({
-      ...response.segment,
-      sessionOffsetSeconds: offset,
-      transcriptionMs: response.transcription_ms,
-      roundTripMs: Math.round(performance.now() - uploadStartedAt),
-      speechProvider: response.speech_provider,
-    });
-    void refreshLiveCoaching(capture, response.segment);
-  }
-  else if (!capture.recorder && !capture.speaking) {
-    // The server heard no real speech in this clip: remove the provisional words instead of leaving them.
-    clearLivePartial();
-  }
-  if (response.segment) showError($('#captureError'), '');
+  capture.lastRecordingId = response.id || capture.lastRecordingId;
+  capture.lastUploadRoundTripMs = Math.round(performance.now() - uploadStartedAt);
+  showError($('#captureError'), '');
   setApiStatus(true);
+}
+
+function attachLiveAudioEvents(capture, socket) {
+  socket.addEventListener('message', (message) => {
+    if (state.capture !== capture) return;
+    let event;
+    try { event = JSON.parse(String(message.data)); } catch { return; }
+    if (event.event === 'transcript.partial') {
+      showLivePartial(event);
+      return;
+    }
+    if (event.event === 'transcript.final') {
+      clearLivePartial();
+      addTranscript({
+        ...event,
+        sessionOffsetSeconds: Number.isFinite(event.start)
+          ? event.start
+          : Math.max(0, (Date.now() - capture.startedAt) / 1000),
+        transcriptionMs: null,
+        speechProvider: 'deepgram',
+      });
+      return;
+    }
+    if (event.event === 'audio.error') showError($('#captureError'), event.detail || 'Live transcription is unavailable.');
+  });
+  socket.addEventListener('close', (event) => {
+    if (state.capture === capture && capture.requested && event.code !== 1000) {
+      showError($('#captureError'), event.reason || 'Live transcription connection closed.');
+    }
+  });
+}
+
+async function finishLiveAudioSocket(capture) {
+  const socket = capture.audioSocket;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  await new Promise((resolve) => {
+    const timeout = window.setTimeout(() => {
+      socket.close();
+      resolve();
+    }, 11_000);
+    const finish = () => {
+      window.clearTimeout(timeout);
+      resolve();
+    };
+    socket.addEventListener('message', (message) => {
+      try {
+        if (JSON.parse(String(message.data)).event === 'audio.stopped') finish();
+      } catch { /* Ignore non-JSON control messages. */ }
+    });
+    socket.addEventListener('close', finish, { once: true });
+    socket.send(JSON.stringify({ type: 'audio.stop' }));
+  });
 }
 
 function enqueueUpload(capture, blob, sequence, offset, duration) {
@@ -1220,6 +1261,7 @@ async function stopCapture({ reason = 'manual' } = {}) {
     $('#sessionStat').textContent = '00:00';
     setCaptureUi(false, false, true);
     sendHealth();
+    await finishLiveAudioSocket(capture);
     // Server finish in background — never block Stop / quit / sleep.
     void request(`/api/v1/audio/sessions/${encodeURIComponent(capture.conversationId)}/finish`, { method: 'POST' })
       .catch(() => undefined);
@@ -1344,12 +1386,43 @@ async function startCaptureSession() {
       segmentStartedAt: 0,
       stopPromise: null,
     };
+    const capture = state.capture;
+    capture.audioSocket = await liveAudio.createAudioSocket({
+      apiBase: state.config.apiBase,
+      deviceId: state.config.deviceId,
+      deviceSecret: state.config.deviceSecret,
+      conversationId: session.conversation_id,
+      sampleRate: audioContext.sampleRate,
+    });
+    attachLiveAudioEvents(capture, capture.audioSocket);
+    await audioContext.audioWorklet.addModule(new URL('pcm-capture-processor.js', document.baseURI).href);
+    const pcmNode = new AudioWorkletNode(audioContext, 'store-listen-pcm-capture', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+    });
+    capture.pcmNode = pcmNode;
+    pcmNode.port.onmessage = ({ data }) => {
+      if (capture.audioSocket?.readyState !== WebSocket.OPEN) return;
+      if (capture.audioSocket.bufferedAmount > 512 * 1024) {
+        if (!capture.audioBackpressureWarning) {
+          capture.audioBackpressureWarning = true;
+          showError($('#captureError'), 'Network is behind live audio. Transcript delivery may be delayed.');
+        }
+        return;
+      }
+      capture.audioSocket.send(data);
+    };
+    source.connect(pcmNode);
+    pcmNode.connect(silent);
     window.clearTimeout(state.captureRetryTimer);
     setCaptureUi(true);
     setMicrophoneStatus('Microphone is active', 'ok');
     monitorVoice(state.capture);
     sendHealth({ speaking: false });
   } catch (error) {
+    state.capture?.audioSocket?.close();
+    state.capture?.pcmNode?.disconnect();
     if (audioContext && audioContext.state !== 'closed') await audioContext.close();
     (state.capture?.stream || stream)?.getTracks().forEach((track) => track.stop());
     state.capture = null;

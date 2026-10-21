@@ -178,7 +178,7 @@ ipcMain.handle('audio-upload', async (_event, payload) => {
   const form = new FormData();
   for (const [key, value] of Object.entries(payload.fields)) form.append(key, String(value));
   form.append('audio', new Blob([bytes], { type: payload.contentType }), payload.filename);
-  const response = await fetch(apiUrl(payload.apiBase, '/api/v1/audio/transcribe'), {
+  const response = await fetch(apiUrl(payload.apiBase, '/api/v1/audio/recordings'), {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${payload.deviceSecret}`,

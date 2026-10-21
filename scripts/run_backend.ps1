@@ -13,13 +13,14 @@ if ((Test-Path $logPath) -and (Get-Item $logPath).Length -ge 10MB) {
 }
 
 Push-Location $backendDirectory
+$previousHost = $env:HOST
 try {
-    $pythonPath = & py.exe -3.13 -c "import sys; print(sys.executable)"
-    if ($LASTEXITCODE -ne 0 -or -not $pythonPath) { throw "Python 3.13 could not be resolved." }
+    $env:HOST = "127.0.0.1"
     $errorLogPath = Join-Path $logDirectory "api.stderr.log"
     $process = Start-Process `
-        -FilePath $pythonPath.Trim() `
-        -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000") `
+        -FilePath "node.exe" `
+        -ArgumentList @("src/server.js") `
+        -WorkingDirectory $backendDirectory `
         -NoNewWindow `
         -PassThru `
         -RedirectStandardOutput $logPath `
@@ -27,5 +28,6 @@ try {
     $process.WaitForExit()
     exit $process.ExitCode
 } finally {
+    $env:HOST = $previousHost
     Pop-Location
 }

@@ -7,13 +7,6 @@ node_modules/
 **/.next-*/
 .vercel/
 **/.vite/
-.pytest_cache/
-**/.pytest_cache/
-__pycache__/
-**/__pycache__/
-*.py[cod]
-.venv/
-venv/
 *.db
 *.sqlite
 *.sqlite3

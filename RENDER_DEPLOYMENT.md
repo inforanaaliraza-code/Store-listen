@@ -1,70 +1,41 @@
-# Render Free Deployment
+# Render Deployment
 
-This repository deploys as two separate Render services from one GitHub repository:
+The root `render.yaml` defines the Node.js/Express API and the Vite static frontend. The API uses MongoDB Atlas for application data and GridFS for durable audio recordings. Do not use local disk for production recordings; Render's free service filesystem is ephemeral.
 
-- `store-listen-api`: Python FastAPI Web Service on Render's Free plan.
-- `store-listen-web`: static Vite frontend (Render Static Sites are free).
+## Required setup
 
-The root `render.yaml` is the single Blueprint for both services. It does not create any paid Render resource.
+1. Create a MongoDB Atlas cluster and database user. Use a unique password, TLS, and Render's outbound IP ranges in the Atlas network access list. Do not allow `0.0.0.0/0` unless there is a deliberate, separately reviewed reason.
+2. In Render, create or sync the Blueprint using this repository's root `render.yaml`.
+3. Set `MONGODB_URI` and `DEEPGRAM_API_KEY` in the API service's private environment settings. Rotate any Deepgram key that was pasted into chat or otherwise exposed before adding a replacement.
+4. Set `DEEPL_API_KEY` only if Spanish-to-English translation is required; it is optional. The app's coaching, transcript analysis, and daily summaries are deterministic phrase rules and verified aggregates, not generative AI.
+5. The Blueprint generates `JWT_SECRET`, sets `STORAGE_PROVIDER=gridfs`, and keeps `DEMO_MODE=true` with mock POS data. Do not use demo mode or mock records for customer reporting.
+6. Wait for the API deployment to pass `/ready`, then check the frontend and verify login, a live Deepgram transcription, WebSocket transcript delivery, report generation, and audio upload/read/delete against the deployed services.
 
-## Before You Deploy
+The current frontend build is configured for `https://store-listen-api-z8yb.onrender.com` and `wss://store-listen-api-z8yb.onrender.com`. If Render assigns different hostnames, update the API CORS origin and both `VITE_API_URL`/`VITE_WS_URL`, then redeploy the frontend because Vite values are embedded at build time.
 
-1. Push `render.yaml`, `backend/.python-version`, and `frontend/package-lock.json` to the GitHub `main` branch.
-2. Create a MongoDB Atlas M0 free cluster, database user, and database. Atlas is external to Render; it is not created by this Blueprint.
-3. Copy the Atlas connection URI somewhere private. Do not commit it or send it in chat. Render will request it as `MONGODB_URI` when syncing the Blueprint.
-4. In Render, open the `store-listen-api` service's **Connect → Outbound** tab and copy its regional outbound CIDR ranges. Add those ranges to Atlas **Security → Network Access → IP Access List**. Render shares outbound ranges by region; use the service's displayed list rather than allowing `0.0.0.0/0`. Protect the cluster with a unique, strong database-user password and TLS.
+## API environment
 
-## Create Both Services
+Required for production:
 
-1. Open the Render Dashboard and choose **New → Blueprint**.
-2. Connect `inforanaaliraza-code/Store-listen`, choose branch `main`, and select the repository-root `render.yaml`.
-3. Keep the generated plan as Free. When Render prompts for `MONGODB_URI`, paste the Atlas URI in the Render form only. Render generates separate `JWT_SECRET` and `SESSION_SECRET` values.
-4. Apply the Blueprint. It creates both services and deploys them. Wait for `store-listen-api` to become Live before testing the site.
-5. Confirm the API health endpoint responds: `https://store-listen-api-z8yb.onrender.com/health`. Confirm `/ready` reports `demo` and a connected database.
-6. Open `https://store-listen-web-qkkv.onrender.com/login`. The Blueprint sets `VITE_API_URL` and `VITE_WS_URL` to the API service, and configures API CORS for this exact frontend origin.
+- `APP_ENV=production`
+- `HOST=0.0.0.0` (Render's external listener)
+- `MONGODB_URI`
+- `MONGO_DATABASE_NAME`
+- `JWT_SECRET` (unique; at least 32 characters)
+- `DEEPGRAM_API_KEY`
+- `STORAGE_PROVIDER=gridfs`
+- `CORS_ORIGINS` (exact frontend HTTPS origin)
 
-If Render assigns different `onrender.com` hostnames because those names are already in use, update `API_BASE_URL`, `WEB_BASE_URL`, and `CORS_ORIGINS` on `store-listen-api`, plus `VITE_API_URL` and `VITE_WS_URL` on `store-listen-web`, then redeploy both. CORS origin values must be HTTPS origins only, with no trailing slash. The frontend values are embedded at build time, so changing them requires a frontend redeploy.
+Optional:
 
-## Service Settings (If Creating Manually)
+- `DEEPL_API_KEY` and `DEEPL_API_URL` for translation
+- `POS_PROVIDER` (currently only mock/demo POS is available)
+- `AUDIO_RETENTION_DAYS` and `TRANSCRIPT_RETENTION_DAYS`
 
-### Backend Web Service
+Production startup fails closed when the Mongo URI, production JWT secret, Deepgram key, or GridFS storage mode is missing. Render Free may sleep, has limited CPU/RAM, and cannot provide always-on real-time capture; use a paid service for dependable production operation. MongoDB Atlas and Deepgram have their own availability, capacity, and billing limits.
 
-- Repository: `inforanaaliraza-code/Store-listen`
-- Branch: `main`
-- Runtime: Python 3
-- Root Directory: `backend`
-- Plan: **Free**
-- Build Command: `pip install -r requirements.txt`
-- Start Command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- Health Check Path: `/health`
-- Python: `3.13.4` (also pinned by `backend/.python-version`)
+## Desktop
 
-Required environment values are declared in `render.yaml`. The only value you must provide manually is `MONGODB_URI`; the JWT/session secrets are generated. Keep `APP_ENV=development` and `DEMO_MODE=true` for this free demo deployment.
-
-Daily report summaries use Gemini first and fall back to Groq if Gemini is unavailable. The Blueprint declares `GEMINI_API_KEY` and `GROQ_API_KEY` as secret environment values (`sync: false`), so set them in the Render API service's Environment settings and redeploy; the local `backend/.env` file is never deployed. The Groq fallback only works when `GROQ_API_KEY` is set on that service. Daily reports also require `DEMO_MODE=false` and live reportable data; do not disable demo mode while the service is using seeded/demo records or mock POS data.
+The desktop installer must be built with an explicit HTTPS API URL supplied privately to the release build. Never place service credentials in frontend `VITE_*` variables or the desktop application. The desktop device pairs through the Node API and sends capture chunks over the authenticated WebSocket connection.
 
 If a provider key has been pasted into chat, committed, or otherwise shared, revoke it and create a replacement before adding the replacement to Render or a local ignored `.env` file.
-
-### Frontend Static Site
-
-- Repository: `inforanaaliraza-code/Store-listen`
-- Branch: `main`
-- Root Directory: `frontend`
-- Build Command: `npm ci && npm run build`
-- Publish Directory: `dist`
-- Rewrite: `/*` to `/index.html` for React Router routes such as `/login` and `/dashboard`
-- Environment: `VITE_API_URL=https://store-listen-api-z8yb.onrender.com`, `VITE_WS_URL=wss://store-listen-api-z8yb.onrender.com`
-
-`frontend/package-lock.json` lets the independent Static Site install the Vite workspace reproducibly. `VITE_*` values are public build-time settings, not secrets.
-
-## Free-Plan Limits
-
-- Free web services have 512 MB RAM and 0.1 CPU. Whisper's local model can be slow, run out of memory, or fail to initialize on this plan; `tiny`/`int8` is configured but is not guaranteed to fit reliably.
-- A free web service spins down after 15 minutes without inbound HTTP or WebSocket traffic. The next request can wait about a minute while it wakes up.
-- Free web-service filesystems are ephemeral. Audio stored under `/tmp/storelisten-audio` is lost when the service sleeps, restarts, or redeploys. There is no persistent disk on the Free plan.
-- Render provides 750 free web-service instance hours per workspace per calendar month. If the workspace exhausts its included usage, free services can be suspended for the rest of the month; monitor usage and keep any spend limit at $0 if available.
-- Static Sites are free, but use monthly bandwidth/build-pipeline allowances.
-- This configuration uses no Render Postgres or Key Value instance. Atlas M0 is a separate free database tier with its own quotas and availability limits.
-- The app is deliberately in demo mode with mock AI/POS providers. Demo credentials and demo data must not be used for real store data. Production startup currently fails closed because the repository does not yet implement real POS and shared object-storage adapters.
-
-Render Free services are public, and this app includes seeded demo credentials; this is an unprotected demo, not a secure customer deployment. For durable recordings and always-on transcription, use paid compute plus shared object storage, or a container host with adequate memory and storage.
