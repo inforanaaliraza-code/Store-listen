@@ -6,6 +6,7 @@ const deviceHealth = window.StoreListenDeviceHealth;
 const { isDeviceSessionExpired } = window.StoreListenDeviceConfig;
 const { stopCaptureAndDrain } = window.StoreListenRecordingLifecycle;
 const { formatUserError } = window.StoreListenErrorMessages;
+const { getCaptureUiState } = window.StoreListenCaptureUiState;
 const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 7000;
 const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 500;
 const MIN_VOICED_MS = voiceDetection.config?.minVoicedMs ?? 280;
@@ -61,6 +62,9 @@ const state = {
   captureRetryTimer: null,
   liveSession: null,
   approvalStatus: 'unknown',
+  approvalCheckFailed: false,
+  approvalRefreshPromise: null,
+  captureStarting: '',
   approvalTimer: null,
   waveformFrame: 0,
 };
@@ -112,7 +116,7 @@ async function checkSetupConnection() {
       : 'Backend connected. Sign in with your Store Listen account to activate this PC.';
   } catch {
     status.dataset.state = 'offline';
-    status.textContent = 'Backend unreachable. Check Tailscale and confirm the backend computer is online.';
+    status.textContent = 'Backend unreachable. Check the internet connection and Store Listen API status.';
   }
 }
 
@@ -240,6 +244,10 @@ function showWorkspace(config) {
   window.clearInterval(state.setupHealthTimer);
   state.setupHealthTimer = null;
   state.config = config;
+  state.approvalStatus = 'unknown';
+  state.approvalCheckFailed = false;
+  state.approvalRefreshPromise = null;
+  state.captureStarting = '';
   renderLiveCoaching(null, 'Ready when conversation starts');
   setupScreen.hidden = true;
   appScreen.hidden = false;
@@ -257,6 +265,8 @@ function showWorkspace(config) {
   $('#navTranscriptCount').textContent = String(state.sessions.length);
   $('#archiveTranscriptCount').textContent = String(state.sessions.length);
   setActiveView('capture');
+  setApprovalBanner(state.approvalStatus);
+  setCaptureUi(false);
   renderTranscriptArchive();
   void ensureDefaultMicrophoneSelected();
   const micSelect = $('#microphoneSelect');
@@ -450,36 +460,50 @@ function connectHealth() {
 function setApprovalBanner(status) {
   const banner = $('#approvalBanner');
   if (!banner) return;
-  if (status === 'approved') {
+  if (status === 'approved' && !state.approvalCheckFailed) {
     banner.hidden = true;
     return;
   }
   banner.hidden = false;
-  if (status === 'rejected') {
-    banner.textContent = 'This device was rejected. Register a new device or contact your organization.';
+  if (state.approvalCheckFailed || status === 'unknown') {
+    $('#approvalMessage').textContent = 'Could not verify approval. Check your connection, then retry.';
+    $('#approvalRetry').hidden = false;
+  } else if (status === 'rejected') {
+    $('#approvalMessage').textContent = 'This device was rejected. Contact your administrator or register it again.';
+    $('#approvalRetry').hidden = true;
   } else {
-    banner.textContent = 'Waiting to verify this device before capture can start.';
+    $('#approvalMessage').textContent = 'Waiting for admin approval. Recording is off until this device is approved.';
+    $('#approvalRetry').hidden = false;
   }
 }
 
 async function refreshApprovalStatus() {
   if (!state.config?.deviceId) return state.approvalStatus;
+  if (state.approvalRefreshPromise) return state.approvalRefreshPromise;
+  const deviceId = state.config.deviceId;
+  const refresh = (async () => {
+    try {
+      const result = await request(`/api/v1/devices/${encodeURIComponent(deviceId)}/approval`);
+      if (state.config?.deviceId === deviceId) {
+        const approval = result.approved ? 'approved' : String(result.approval_status || 'pending').toLowerCase();
+        state.approvalStatus = ['approved', 'rejected'].includes(approval) ? approval : 'pending';
+        state.approvalCheckFailed = false;
+      }
+    } catch {
+      if (state.config?.deviceId === deviceId) state.approvalCheckFailed = true;
+    }
+    if (state.config?.deviceId === deviceId) {
+      setApprovalBanner(state.approvalStatus);
+      if (!state.capture) setCaptureUi(false);
+    }
+    return state.approvalStatus;
+  })();
+  state.approvalRefreshPromise = refresh;
   try {
-    const result = await request(`/api/v1/devices/${encodeURIComponent(state.config.deviceId)}/approval`);
-    state.approvalStatus = result.approved ? 'approved' : (result.approval_status || 'pending');
-  } catch {
-    // Keep last known status when the approval check fails briefly.
+    return await refresh;
+  } finally {
+    if (state.approvalRefreshPromise === refresh) state.approvalRefreshPromise = null;
   }
-  setApprovalBanner(state.approvalStatus);
-  const blocked = state.approvalStatus !== 'approved';
-  if (blocked && !state.capture) {
-    $('#captureButton').disabled = true;
-    $('#captureTitle').textContent = state.approvalStatus === 'rejected' ? 'Approval rejected' : 'Awaiting approval';
-    $('#captureMessage').textContent = state.approvalStatus === 'rejected'
-      ? 'Register a new device or contact your organization.'
-      : 'Device status could not be verified. Recording will start when access is available.';
-  }
-  return state.approvalStatus;
 }
 
 function startApprovalPolling() {
@@ -500,7 +524,7 @@ function startApprovalPolling() {
 async function beginApprovedCapture() {
   const status = await refreshApprovalStatus();
   startApprovalPolling();
-  if (status === 'approved') void startCapture();
+  if (status === 'approved' && !state.approvalCheckFailed) void startCapture();
 }
 
 let smoothedMicLevel = 0;
@@ -531,23 +555,27 @@ function resetMicWaveform() {
 }
 
 function setCaptureUi(recording, busy = false, ended = false) {
+  const captureState = getCaptureUiState({
+    recording,
+    busy,
+    starting: state.captureStarting,
+    approvalStatus: state.approvalStatus,
+    approvalCheckFailed: state.approvalCheckFailed,
+    manuallyStopped: isManuallyStopped(),
+    ended,
+  });
   const hero = $('#captureHero');
   if (hero) hero.classList.toggle('recording', recording);
   const indicator = $('#captureIndicator span');
-  if (indicator) indicator.textContent = recording ? 'LIVE' : busy ? 'SAVING' : ended ? 'ENDED' : 'READY';
-  const awaitingApproval = state.approvalStatus !== 'approved' && state.approvalStatus !== 'unknown';
-  $('#captureTitle').textContent = awaitingApproval && !recording
-    ? (state.approvalStatus === 'rejected' ? 'Approval rejected' : 'Awaiting approval')
-    : recording ? 'Listening' : busy ? 'Saving…' : ended ? 'Session saved' : 'Ready to capture';
-  $('#captureMessage').textContent = awaitingApproval && !recording
-    ? 'Recording stays off until an admin approves this store in the web portal.'
-    : recording
-      ? 'Microphone is active. English and Spanish speech appears here in English.'
-      : busy ? 'Finishing uploads…' : ended ? 'Start again for the next conversation.' : 'Pick a mic and start.';
-  $('#captureButtonLabel').textContent = recording ? 'Stop recording' : busy ? 'Saving…' : 'Start recording';
+  if (indicator) indicator.textContent = captureState.indicator;
+  $('#captureTitle').textContent = captureState.title;
+  $('#captureMessage').textContent = captureState.message;
+  $('#captureButtonLabel').textContent = captureState.buttonLabel;
   $('#captureButton').classList.toggle('stopping', recording);
-  $('#captureButton').disabled = busy || (awaitingApproval && !recording);
-  $('#microphoneSelect').disabled = recording || busy;
+  $('#captureButton').disabled = captureState.buttonDisabled;
+  $('#captureButton').title = captureState.buttonTitle;
+  $('#captureButton').setAttribute('aria-label', captureState.buttonLabel);
+  $('#microphoneSelect').disabled = recording || busy || Boolean(state.captureStarting);
   $('#deliveryStat').innerHTML = recording ? '<i class="stat-dot"></i>Live' : ended ? '<i class="stat-dot"></i>Ended' : '<i class="stat-dot"></i>Ready';
   if (recording) $('#captureButtonIcon').innerHTML = '<rect x="6" y="6" width="12" height="12" rx="1"/>';
   else $('#captureButtonIcon').innerHTML = '<path d="M12 3v12M8 7v7a4 4 0 0 0 8 0V7M5 12a7 7 0 0 0 14 0M12 19v3M9 22h6"/>';
@@ -1282,20 +1310,31 @@ async function startCapture({ fromUser = false } = {}) {
   }
   if (state.capture) return;
   if (state.captureStartPromise) return state.captureStartPromise;
-  const approval = await refreshApprovalStatus();
-  if (approval !== 'approved') {
+  state.captureStarting = 'checking';
+  setCaptureUi(false);
+  const starting = (async () => {
+    const approval = await refreshApprovalStatus();
+    if (state.approvalCheckFailed) {
+      showError($('#captureError'), 'Could not verify device approval. Check the API connection and try again.');
+      return;
+    }
+    if (approval !== 'approved') {
+      showError($('#captureError'), approval === 'rejected'
+        ? 'This device was rejected. Register it again or contact your organization.'
+        : 'This device is waiting for admin approval. Recording cannot start yet.');
+      return;
+    }
+    state.captureStarting = 'starting';
     setCaptureUi(false);
-    showError($('#captureError'), approval === 'rejected'
-      ? 'This device was rejected. Register a new device or contact your organization.'
-      : 'Device status could not be verified. Recording cannot start yet.');
-    return;
-  }
-  const starting = startCaptureSession();
+    await startCaptureSession();
+  })();
   state.captureStartPromise = starting;
   try {
     await starting;
   } finally {
+    state.captureStarting = '';
     if (state.captureStartPromise === starting) state.captureStartPromise = null;
+    setCaptureUi(Boolean(state.capture));
   }
 }
 
@@ -1452,8 +1491,6 @@ async function startCaptureSession() {
     } else {
       showError($('#captureError'), message || 'Could not start microphone capture. Check Windows privacy settings and API availability.');
     }
-  } finally {
-    if (state.approvalStatus === 'approved') $('#captureButton').disabled = false;
   }
 }
 
@@ -1537,6 +1574,20 @@ $('#deviceForm').addEventListener('submit', async (event) => {
 $('#captureButton').addEventListener('click', () => {
   if (state.capture) void stopCapture({ reason: 'manual' });
   else void startCapture({ fromUser: true });
+});
+
+$('#approvalRetry').addEventListener('click', async () => {
+  const button = $('#approvalRetry');
+  button.disabled = true;
+  button.textContent = 'Checking…';
+  showError($('#captureError'), '');
+  try {
+    const approval = await refreshApprovalStatus();
+    if (approval === 'approved' && !state.capture && !isManuallyStopped()) void startCapture();
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Check status';
+  }
 });
 
 window.storeListen.onCaptureStopRequested(async () => {
