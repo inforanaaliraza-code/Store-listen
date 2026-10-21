@@ -1,5 +1,4 @@
 export const ENGLISH_TRANSLATION_PENDING = 'English translation pending';
-export const ENGLISH_TRANSLATION_UNAVAILABLE = 'English translation unavailable';
 
 const SPANISH_MARKERS = new Set([
   'hola', 'gracias', 'senor', 'tenemos', 'producto', 'necesito', 'quiero', 'cuanto', 'favor',
@@ -28,7 +27,5 @@ export function englishTranscriptText(original: string, englishText: string | nu
     && !containsSpanishClause(translation)
   ) return translation;
 
-  return translation === ENGLISH_TRANSLATION_PENDING
-    ? ENGLISH_TRANSLATION_PENDING
-    : ENGLISH_TRANSLATION_UNAVAILABLE;
+  return translation === ENGLISH_TRANSLATION_PENDING ? ENGLISH_TRANSLATION_PENDING : source;
 }

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const backendDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const configurationModule = "import('./src/config.js').then(({ config }) => console.log(JSON.stringify({ demoMode: config.demoMode, deepgramApiKey: config.deepgramApiKey, deeplApiKey: config.deeplApiKey })))";
+const configurationModule = "import('./src/config.js').then(({ config }) => console.log(JSON.stringify({ demoMode: config.demoMode, deepgramApiKey: config.deepgramApiKey, deeplApiKey: config.deeplApiKey, groqModel: config.groqModel })))";
 const productionEnvironment = {
   ...process.env,
   APP_ENV: 'production',
@@ -51,6 +51,23 @@ test('production config trims provider key line endings and rejects embedded con
   const trailingNewline = loadConfiguration({
     ...productionEnvironment,
     DEEPGRAM_API_KEY: 'test-deepgram-key\r\n',
+  });
+
+  test('production config migrates the retired Groq model to its supported replacement', () => {
+    const retiredModel = loadConfiguration({
+      ...productionEnvironment,
+      GROQ_MODEL: 'llama-3.3-70b-versatile',
+    });
+    assert.equal(retiredModel.status, 0, retiredModel.stderr);
+    assert.match(retiredModel.stdout, /"groqModel":"openai\/gpt-oss-120b"/);
+    assert.match(retiredModel.stderr, /is retired; using openai\/gpt-oss-120b/);
+
+    const defaultModel = loadConfiguration({
+      ...productionEnvironment,
+      GROQ_MODEL: '',
+    });
+    assert.equal(defaultModel.status, 0, defaultModel.stderr);
+    assert.match(defaultModel.stdout, /"groqModel":"openai\/gpt-oss-120b"/);
   });
   assert.equal(trailingNewline.status, 0, trailingNewline.stderr);
   assert.match(trailingNewline.stdout, /"deepgramApiKey":"test-deepgram-key"/);

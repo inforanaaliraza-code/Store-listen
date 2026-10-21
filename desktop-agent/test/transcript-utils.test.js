@@ -54,7 +54,7 @@ test('English speech does not get an EN translation line even if it contains gra
   assert.equal(englishOnly, '');
 });
 
-test('mixed Spanish is shown only as English even when speech detection reports English', () => {
+test('untranslated mixed Spanish falls back to the source text instead of placeholder spam', () => {
   const mixed = 'What is the accent of Barcelona? Yo me acuerdo que fui un dia a Madrid con amigas, y nos dijeron que eran clientes.';
   const translated = 'I remember going to Madrid with friends, and they told us those customers were kind.';
   const [translatedPart] = paragraphParts([{ segment: {
@@ -66,8 +66,7 @@ test('mixed Spanish is shown only as English even when speech detection reports 
   const [pendingPart] = paragraphParts([{ segment: { originalText: mixed, language: 'en' } }]);
 
   assert.equal(translatedPart.english, translated);
-  assert.equal(pendingPart.english, 'English translation unavailable');
-  assert.doesNotMatch(pendingPart.english, /Madrid|amigas/i);
+  assert.equal(pendingPart.english, mixed);
 });
 
 test('TXT export uses paragraph flow with staff English line', () => {

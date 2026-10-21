@@ -37,6 +37,7 @@ const aiRuns = [];
 const intents = [];
 const dailyReports = [];
 const publishedEvents = [];
+const coachingContexts = [];
 let testConfig;
 const stockItems = [];
 const storeRules = [];
@@ -268,10 +269,11 @@ before(async () => {
     englishTranslator: async (_text, options) => {
       assert.equal(options.groqApiKey, 'test-groq-key');
       assert.equal(options.groqModel, 'test-groq-model');
+      if (_text === '¿Tiene un cargador?') throw new Error('provider temporarily unavailable');
       return 'Hello, I need a charger.';
     },
     groqCoaching: async ({ transcript }) => {
-      assert.equal(transcript.at(-1).text, 'I need a charger.');
+      coachingContexts.push(transcript);
       return {
         recommendation: 'Ask which charger connector the customer needs.',
         confidence: 0.92,
@@ -315,6 +317,7 @@ test('readiness reports database, deployment mode, and transcription capability'
     status: 'ready',
     mode: 'demo',
     database: 'connected',
+    providers: { groq_model: 'test-groq-model' },
     capabilities: {
       transcription: 'available',
       english_translation: 'available',
@@ -961,6 +964,28 @@ test('speaker attribution is scoped and coaching uses only English transcript te
   assert.equal(coachingBody.suggestion.message, 'Ask which charger connector the customer needs.');
   assert.equal(coachingBody.provider, 'groq');
   assert.equal(coachingBody.alerts[0].title, 'Confirm compatibility');
+
+  transcriptSegments.push({
+    id: 'segment-coaching-untranslated-test',
+    conversation_id: conversationId,
+    speaker_id: 'speaker-customer',
+    language: 'es',
+    original_text: '¿Tiene un cargador?',
+    translated_text: null,
+    start_time: 2,
+    created_at: new Date(),
+  });
+  const coachingWithSpanishFallback = await fetch(`${baseUrl}/api/v1/audio/coaching/${conversationId}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({}),
+  });
+  assert.equal(coachingWithSpanishFallback.status, 200);
+  assert.equal(
+    coachingContexts.at(-1).some((line) => line.text === '¿Tiene un cargador?'),
+    true,
+    'coaching should receive source-language text when translation is unavailable',
+  );
 
   transcriptSegments.push({
     id: 'segment-untranslated-test',

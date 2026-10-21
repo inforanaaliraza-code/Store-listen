@@ -31,7 +31,14 @@ const deeplApiKey = String(process.env.DEEPL_API_KEY || '').trim();
 if (/[^\x20-\x7e]/.test(deeplApiKey)) {
   throw new Error('DEEPL_API_KEY contains invalid characters. Re-enter it without line breaks.');
 }
-const groqModel = String(process.env.GROQ_MODEL || '').trim() || 'llama-3.3-70b-versatile';
+const requestedGroqModel = String(process.env.GROQ_MODEL || '').trim();
+const deprecatedGroqModels = new Map([
+  ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b'],
+]);
+const groqModel = deprecatedGroqModels.get(requestedGroqModel) || requestedGroqModel || 'openai/gpt-oss-120b';
+if (deprecatedGroqModels.has(requestedGroqModel)) {
+  console.warn(`GROQ_MODEL=${requestedGroqModel} is retired; using ${groqModel}.`);
+}
 if (groqModel.length > 100 || /[\r\n]/.test(groqModel)) {
   throw new Error('GROQ_MODEL must be a model name no longer than 100 characters.');
 }

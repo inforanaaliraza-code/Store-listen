@@ -88,6 +88,25 @@ test('Groq fails clearly without a key, on network errors, and for malformed out
   );
 });
 
+test('Groq provider errors expose a bounded reason without exposing request credentials', async () => {
+  await assert.rejects(
+    generateGroqCoaching({
+      apiKey: 'secret-test-key',
+      model: 'retired-model',
+      transcript: [{ speaker: 'customer', text: 'Hola.' }],
+      fetchImpl: async (_url, options) => {
+        assert.equal(options.headers.Authorization, 'Bearer secret-test-key');
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({ error: { message: 'The selected model has been retired.' } }),
+        };
+      },
+    }),
+    /status 400: The selected model has been retired/,
+  );
+});
+
 test('Groq daily reports reject incomplete output rather than creating a fallback report', async () => {
   await assert.rejects(
     generateGroqDailySummary({

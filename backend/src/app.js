@@ -80,6 +80,9 @@ export function createApp({
       status: ready ? 'ready' : 'not_ready',
       mode: config.demoMode ? 'demo' : 'live',
       database: ready ? 'connected' : 'disconnected',
+      providers: {
+        groq_model: config.groqModel,
+      },
       capabilities: {
         transcription: config.deepgramApiKey ? 'available' : 'unavailable',
         english_translation: config.deeplApiKey || config.groqApiKey ? 'available' : 'unavailable',
@@ -1261,12 +1264,13 @@ export function createApp({
         .sort({ start_time: -1, created_at: -1, id: -1 })
         .limit(5)
         .lean();
+      await repairMissingTranslations(segments);
       const contextLines = segments.reverse().map((segment) => ({
         speaker: segment.speaker_id === 'speaker-customer' ? 'customer'
           : segment.speaker_id?.startsWith('speaker-employee-') ? 'employee' : 'unknown',
-        text: englishTranscriptText(segment) || '',
+        text: englishTranscriptText(segment) || String(segment.original_text || '').trim(),
       })).filter((line) => line.text);
-      if (!contextLines.length) return response.status(409).json({ detail: 'No English conversation text is ready for coaching yet.' });
+      if (!contextLines.length) return response.status(409).json({ detail: 'No readable conversation text is ready for coaching yet.' });
       if (!config.groqApiKey) return response.status(503).json({ detail: 'Live AI coaching is not configured. Set GROQ_API_KEY on the backend service.' });
       const [inventory, storeRules] = await Promise.all([
         StockItemModel?.find({ store_id: conversation.store_id }).limit(30).lean() || [],
