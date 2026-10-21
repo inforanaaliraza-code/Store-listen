@@ -36,34 +36,9 @@ export async function attachDeviceAudioSocket(socket, {
   let stopRequested = false;
   let closed = false;
 
-  const handleTranscript = (result) => {
-    const languages = result.languages.map((language) => String(language).toLowerCase());
-    const spanish = isSpanish(languages);
-    const preview = {
-      event: 'transcript.partial',
-      conversationId: conversation.id,
-      storeId: device.store_id,
-      captureSequence: captureSequence + 1,
-      previewSequence: ++previewSequence,
-      speakerLabel: 'Live transcript',
-      language: spanish ? 'es' : 'en',
-      originalText: result.transcript,
-      translatedText: '',
-      englishText: spanish ? TRANSLATION_PENDING : result.transcript,
-      confidence: result.confidence,
-      isFinal: false,
-      source: 'deepgram_preview',
-      timestamp: new Date().toISOString(),
-    };
-    safeSend(socket, preview);
-    publish(`store:${device.store_id}`, preview);
-
-    if (result.isFinal && result.transcript) finalizedParts.push({ ...result, languages });
-    if (!result.speechFinal) return;
-
+  const queueFinalizedParts = () => {
     const parts = finalizedParts;
     finalizedParts = [];
-    if (!parts.length && result.transcript) parts.push({ ...result, languages });
     if (!parts.length) return;
 
     const utterance = parts.map((part) => part.transcript).join(' ').replace(/\s+/g, ' ').trim();
@@ -121,6 +96,7 @@ export async function attachDeviceAudioSocket(socket, {
         storeId: device.store_id,
         segmentId,
         captureSequence: sequence,
+        sessionOffsetSeconds: Math.max(0, startTime),
         speakerId: 'speaker-unknown',
         speakerLabel: 'Speaker',
         speakerRole: 'unknown',
@@ -140,6 +116,34 @@ export async function attachDeviceAudioSocket(socket, {
       console.error('Could not persist live transcript:', error);
       safeSend(socket, { event: 'audio.error', detail: 'Transcript could not be saved.' });
     });
+  };
+
+  const handleTranscript = (result) => {
+    const languages = result.languages.map((language) => String(language).toLowerCase());
+    const spanish = isSpanish(languages);
+    const preview = {
+      event: 'transcript.partial',
+      conversationId: conversation.id,
+      storeId: device.store_id,
+      captureSequence: captureSequence + 1,
+      previewSequence: ++previewSequence,
+      speakerLabel: 'Live transcript',
+      language: spanish ? 'es' : 'en',
+      originalText: result.transcript,
+      translatedText: '',
+      englishText: spanish ? TRANSLATION_PENDING : result.transcript,
+      confidence: result.confidence,
+      isFinal: false,
+      source: 'deepgram_preview',
+      timestamp: new Date().toISOString(),
+    };
+    safeSend(socket, preview);
+    publish(`store:${device.store_id}`, preview);
+
+    if (result.isFinal && result.transcript) finalizedParts.push({ ...result, languages });
+    if (!result.speechFinal) return;
+    if (!finalizedParts.length && result.transcript) finalizedParts.push({ ...result, languages });
+    queueFinalizedParts();
   };
 
   const streamReady = deepgramFactory({
@@ -166,11 +170,17 @@ export async function attachDeviceAudioSocket(socket, {
       if (control.type === 'ping') return safeSend(socket, { event: 'pong' });
       if (control.type === 'audio.stop') {
         stopRequested = true;
-        void streamReady.then((active) => active.finish()).then(async () => {
+        void streamReady.then(async (active) => {
+          await active.finish();
+          queueFinalizedParts();
           await processing;
           safeSend(socket, { event: 'audio.stopped', conversationId: conversation.id });
           socket.close(1000, 'Audio stream finished');
-        }).catch(() => socket.close(1011, 'Could not finish audio stream'));
+        }).catch((error) => {
+          console.error('Could not finish live transcription stream:', error?.message || 'provider error');
+          safeSend(socket, { event: 'audio.error', detail: 'Final transcript could not be confirmed. Check the saved transcript before closing.' });
+          socket.close(1011, 'Could not finish audio stream');
+        });
       }
       return;
     }

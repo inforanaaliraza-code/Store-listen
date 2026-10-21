@@ -71,10 +71,54 @@ test('device audio socket streams PCM, translates Spanish finals, persists, and 
   assert.equal(stored[0].translated_text, 'Hello, I need a charger.');
   assert.equal(published.at(-1).room, 'store:store-1');
   assert.equal(published.at(-1).event.englishText, 'Hello, I need a charger.');
+  assert.equal(published.at(-1).event.sessionOffsetSeconds, 2);
   assert.equal(client.sent.at(-1).event, 'transcript.final');
 
   client.emit('message', JSON.stringify({ type: 'audio.stop' }), false);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(client.sent.at(-1).event, 'audio.stopped');
   assert.equal(client.closeCode.code, 1000);
+});
+
+test('audio stop flushes final speech that did not receive a speech-final boundary', async () => {
+  const client = new FakeClientSocket();
+  const stored = [];
+  let deepgramOptions;
+
+  await attachDeviceAudioSocket(client, {
+    device: { id: 'device-1', store_id: 'store-1' },
+    conversation: { id: 'conv-1', store_id: 'store-1' },
+    sampleRate: 48000,
+    deepgramApiKey: 'test-deepgram-key',
+    deeplApiKey: '',
+    deeplApiUrl: 'https://api-free.deepl.com',
+    TranscriptSegmentModel: { create: async (row) => stored.push(row) },
+    ConversationModel: { updateOne: async () => {} },
+    publish: () => {},
+    deepgramFactory: async (options) => {
+      deepgramOptions = options;
+      return {
+        sendAudio() {},
+        close() {},
+        finish: async function finish() { this.finished = true; },
+      };
+    },
+  });
+
+  await deepgramOptions.onTranscript({
+    transcript: 'I need help finding a charger.',
+    isFinal: true,
+    speechFinal: false,
+    languages: ['en'],
+    confidence: 0.97,
+    start: 8.5,
+    duration: 1.2,
+  });
+  client.emit('message', JSON.stringify({ type: 'audio.stop' }), false);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].original_text, 'I need help finding a charger.');
+  assert.equal(client.sent.find((event) => event.event === 'transcript.final').sessionOffsetSeconds, 8.5);
+  assert.equal(client.sent.at(-1).event, 'audio.stopped');
 });

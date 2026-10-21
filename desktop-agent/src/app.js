@@ -1086,8 +1086,8 @@ function attachLiveAudioEvents(capture, socket) {
       clearLivePartial();
       addTranscript({
         ...event,
-        sessionOffsetSeconds: Number.isFinite(event.start)
-          ? event.start
+        sessionOffsetSeconds: Number.isFinite(event.sessionOffsetSeconds)
+          ? event.sessionOffsetSeconds
           : Math.max(0, (Date.now() - capture.startedAt) / 1000),
         transcriptionMs: null,
         speechProvider: 'deepgram',
@@ -1340,7 +1340,8 @@ async function stopCapture({ reason = 'manual' } = {}) {
     );
     capture.session.status = 'ENDED';
     capture.session.endedAt = new Date();
-    // Local save first so Stop/close feels instant.
+    // Flush the remote speech stream while its final events can still reach this capture.
+    await finishLiveAudioSocket(capture);
     await saveTranscriptArchive(true);
     if (state.view === 'transcripts') renderTranscriptArchive();
     state.capture = null;
@@ -1349,7 +1350,6 @@ async function stopCapture({ reason = 'manual' } = {}) {
     $('#sessionStat').textContent = '00:00';
     setCaptureUi(false, false, true);
     sendHealth();
-    await finishLiveAudioSocket(capture);
     // Server finish in background — never block Stop / quit / sleep.
     void request(`/api/v1/audio/sessions/${encodeURIComponent(capture.conversationId)}/finish`, { method: 'POST' })
       .catch(() => undefined);
