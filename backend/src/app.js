@@ -74,6 +74,9 @@ export function createApp({
       status: ready ? 'ready' : 'not_ready',
       mode: config.demoMode ? 'demo' : 'live',
       database: ready ? 'connected' : 'disconnected',
+      capabilities: {
+        transcription: config.deepgramApiKey ? 'available' : 'unavailable',
+      },
     });
   });
   app.get('/metrics', (_request, response) => response.json({ requests_total: 0, demo_mode: config.demoMode }));

@@ -6,7 +6,7 @@ const deviceHealth = window.StoreListenDeviceHealth;
 const { isDeviceSessionExpired } = window.StoreListenDeviceConfig;
 const { stopCaptureAndDrain } = window.StoreListenRecordingLifecycle;
 const { formatUserError } = window.StoreListenErrorMessages;
-const { getCaptureUiState } = window.StoreListenCaptureUiState;
+const { approvalFailureMessage, getCaptureUiState, getDeliveryStatus } = window.StoreListenCaptureUiState;
 const MAX_SEGMENT_MS = voiceDetection.config?.maxSegmentMs ?? 7000;
 const MIN_CLIP_MS = voiceDetection.config?.minClipMs ?? 500;
 const MIN_VOICED_MS = voiceDetection.config?.minVoicedMs ?? 280;
@@ -63,7 +63,10 @@ const state = {
   liveSession: null,
   approvalStatus: 'unknown',
   approvalCheckFailed: false,
+  approvalCheckError: '',
   approvalRefreshPromise: null,
+  transcriptionAvailable: null,
+  apiOnline: null,
   captureStarting: '',
   approvalTimer: null,
   waveformFrame: 0,
@@ -246,8 +249,11 @@ function showWorkspace(config) {
   state.config = config;
   state.approvalStatus = 'unknown';
   state.approvalCheckFailed = false;
+  state.approvalCheckError = '';
   state.approvalRefreshPromise = null;
   state.captureStarting = '';
+  state.transcriptionAvailable = null;
+  state.apiOnline = null;
   renderLiveCoaching(null, 'Ready when conversation starts');
   setupScreen.hidden = true;
   appScreen.hidden = false;
@@ -290,26 +296,52 @@ function setDeviceStatus(online) {
 let apiFailureStreak = 0;
 let apiRecheckTimer = null;
 
-function setApiStatus(online) {
+function setApiStatus(online, readiness = null) {
   // One slow request must not flip the badge; show Unavailable only after two failures in a row.
   apiFailureStreak = online ? 0 : apiFailureStreak + 1;
   if (!online && apiFailureStreak < 2) return;
+  state.apiOnline = online;
   const status = $('#apiStatus');
-  const html = `<i class="status-dot${online ? '' : ' bad'}"></i>${online ? 'Available' : 'Unavailable'}`;
+  if (readiness) {
+    state.transcriptionAvailable = readiness.capabilities?.transcription
+      ? readiness.capabilities.transcription === 'available'
+      : null;
+  }
+  const label = !online ? 'Unavailable' : readiness?.mode === 'demo' ? 'Demo API' : 'API available';
+  const html = `<i class="status-dot${online && state.transcriptionAvailable !== false ? '' : ' bad'}"></i>${label}`;
   if (status.innerHTML !== html) status.innerHTML = html;
+  status.title = !online
+    ? 'The API readiness check failed.'
+    : state.transcriptionAvailable === false
+      ? 'The API is reachable, but live transcription is not configured.'
+      : readiness?.mode === 'demo'
+        ? 'Connected to the API in demo mode; data may be sample data.'
+        : 'The API and database are available.';
+  const notices = [];
+  if (online && readiness?.mode === 'demo') notices.push('Demo mode is enabled: displayed store activity may be sample data, not live customer activity.');
+  if (online && state.transcriptionAvailable === false) notices.push('Live transcription is unavailable. Ask the administrator to configure Deepgram on the API service.');
+  const notice = $('#serviceNotice');
+  notice.textContent = notices.join(' ');
+  notice.hidden = notices.length === 0;
   if (!online && !state.capture) $('#deliveryStat').innerHTML = '<i class="stat-dot pending"></i>Offline';
   else if (online && !state.capture) $('#deliveryStat').innerHTML = '<i class="stat-dot"></i>Ready';
+  if (!state.capture) setCaptureUi(false);
 }
 
 async function checkApi() {
   try {
-    await request('/health');
-    setApiStatus(true);
+    const readiness = await request('/ready');
+    if (readiness.status !== 'ready' || readiness.database !== 'connected') {
+      throw new Error('Store Listen API is not ready.');
+    }
+    setApiStatus(true, readiness);
+    return true;
   } catch {
     setApiStatus(false);
     // Render may be waking up or redeploying: look again in 4s instead of waiting a full cycle.
     window.clearTimeout(apiRecheckTimer);
     apiRecheckTimer = window.setTimeout(() => void checkApi(), 4_000);
+    return false;
   }
 }
 
@@ -466,7 +498,7 @@ function setApprovalBanner(status) {
   }
   banner.hidden = false;
   if (state.approvalCheckFailed || status === 'unknown') {
-    $('#approvalMessage').textContent = 'Could not verify approval. Check your connection, then retry.';
+    $('#approvalMessage').textContent = state.approvalCheckError || 'Could not verify approval. Check your connection, then retry.';
     $('#approvalRetry').hidden = false;
   } else if (status === 'rejected') {
     $('#approvalMessage').textContent = 'This device was rejected. Contact your administrator or register it again.';
@@ -488,9 +520,13 @@ async function refreshApprovalStatus() {
         const approval = result.approved ? 'approved' : String(result.approval_status || 'pending').toLowerCase();
         state.approvalStatus = ['approved', 'rejected'].includes(approval) ? approval : 'pending';
         state.approvalCheckFailed = false;
+        state.approvalCheckError = '';
       }
-    } catch {
-      if (state.config?.deviceId === deviceId) state.approvalCheckFailed = true;
+    } catch (error) {
+      if (state.config?.deviceId === deviceId) {
+        state.approvalCheckFailed = true;
+        state.approvalCheckError = approvalFailureMessage(error);
+      }
     }
     if (state.config?.deviceId === deviceId) {
       setApprovalBanner(state.approvalStatus);
@@ -561,6 +597,8 @@ function setCaptureUi(recording, busy = false, ended = false) {
     starting: state.captureStarting,
     approvalStatus: state.approvalStatus,
     approvalCheckFailed: state.approvalCheckFailed,
+    approvalCheckError: state.approvalCheckError,
+    transcriptionAvailable: state.transcriptionAvailable,
     manuallyStopped: isManuallyStopped(),
     ended,
   });
@@ -576,7 +614,16 @@ function setCaptureUi(recording, busy = false, ended = false) {
   $('#captureButton').title = captureState.buttonTitle;
   $('#captureButton').setAttribute('aria-label', captureState.buttonLabel);
   $('#microphoneSelect').disabled = recording || busy || Boolean(state.captureStarting);
-  $('#deliveryStat').innerHTML = recording ? '<i class="stat-dot"></i>Live' : ended ? '<i class="stat-dot"></i>Ended' : '<i class="stat-dot"></i>Ready';
+  const delivery = getDeliveryStatus({
+    recording,
+    busy,
+    apiOnline: state.apiOnline,
+    approvalStatus: state.approvalStatus,
+    approvalCheckFailed: state.approvalCheckFailed,
+    transcriptionAvailable: state.transcriptionAvailable,
+    ended,
+  });
+  $('#deliveryStat').innerHTML = `<i class="stat-dot${['Offline', 'Blocked', 'Unavailable', 'Check connection'].includes(delivery) ? ' pending' : ''}"></i>${delivery}`;
   if (recording) $('#captureButtonIcon').innerHTML = '<rect x="6" y="6" width="12" height="12" rx="1"/>';
   else $('#captureButtonIcon').innerHTML = '<path d="M12 3v12M8 7v7a4 4 0 0 0 8 0V7M5 12a7 7 0 0 0 14 0M12 19v3M9 22h6"/>';
   if (!recording) resetMicWaveform();
@@ -1315,13 +1362,21 @@ async function startCapture({ fromUser = false } = {}) {
   const starting = (async () => {
     const approval = await refreshApprovalStatus();
     if (state.approvalCheckFailed) {
-      showError($('#captureError'), 'Could not verify device approval. Check the API connection and try again.');
+      showError($('#captureError'), state.approvalCheckError);
       return;
     }
     if (approval !== 'approved') {
       showError($('#captureError'), approval === 'rejected'
         ? 'This device was rejected. Register it again or contact your organization.'
         : 'This device is waiting for admin approval. Recording cannot start yet.');
+      return;
+    }
+    if (!await checkApi()) {
+      showError($('#captureError'), 'The Store Listen API is not ready. Check the connection and retry.');
+      return;
+    }
+    if (state.transcriptionAvailable === false) {
+      showError($('#captureError'), 'Live transcription is unavailable because Deepgram is not configured on the API. Ask your administrator to configure it.');
       return;
     }
     state.captureStarting = 'starting';

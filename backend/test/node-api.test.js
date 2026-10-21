@@ -219,6 +219,7 @@ before(async () => {
     speechProvider: 'deepgram',
     posProvider: 'mock',
     storageProvider: 'local',
+    deepgramApiKey: 'test-deepgram-key',
     audioStorageDir: audioDirectory,
     audioRetentionDays: 7,
     transcriptRetentionDays: 30,
@@ -275,7 +276,7 @@ test('legacy PBKDF2 password hashes verify without migration', () => {
   assert.equal(verifyPassword('wrong password', user.password_hash), false);
 });
 
-test('health and readiness preserve the existing response shape', async () => {
+test('readiness reports database, deployment mode, and transcription capability', async () => {
   const [health, ready] = await Promise.all([
     fetch(`${baseUrl}/health`),
     fetch(`${baseUrl}/ready`),
@@ -283,7 +284,21 @@ test('health and readiness preserve the existing response shape', async () => {
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), { status: 'ok' });
   assert.equal(ready.status, 200);
-  assert.deepEqual(await ready.json(), { status: 'ready', mode: 'demo', database: 'connected' });
+  assert.deepEqual(await ready.json(), {
+    status: 'ready',
+    mode: 'demo',
+    database: 'connected',
+    capabilities: { transcription: 'available' },
+  });
+  const configuredKey = testConfig.deepgramApiKey;
+  try {
+    delete testConfig.deepgramApiKey;
+    const missingTranscriber = await fetch(`${baseUrl}/ready`);
+    assert.equal(missingTranscriber.status, 200);
+    assert.deepEqual((await missingTranscriber.json()).capabilities, { transcription: 'unavailable' });
+  } finally {
+    testConfig.deepgramApiKey = configuredKey;
+  }
 });
 
 test('login preserves the React client token response and audit log', async () => {

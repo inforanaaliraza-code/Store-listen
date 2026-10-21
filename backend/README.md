@@ -11,7 +11,7 @@ npm install
 npm run dev
 ```
 
-The API listens on `http://localhost:8000`. Health: `http://localhost:8000/health`; readiness: `http://localhost:8000/ready`.
+The API listens on `http://localhost:8000`. Health: `http://localhost:8000/health`; readiness: `http://localhost:8000/ready`. Readiness reports whether Deepgram transcription is configured; it never returns the key itself.
 The Node service loads `backend/.env` first and then the repository-root `.env`; shell/Render environment variables take precedence. Never commit API keys.
 
 Live transcription requires `DEEPGRAM_API_KEY`; Spanish-to-English translation uses optional `DEEPL_API_KEY`. Conversation analysis, coaching, and daily summaries use local phrase rules and verified database aggregates; they do not call a generative LLM. Treat phrase matches and opportunity labels as review signals, not proof of customer intent or employee performance. Daily reports state when live POS data is unavailable and never estimate revenue.

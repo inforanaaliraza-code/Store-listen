@@ -97,13 +97,14 @@
               <button class="capture-button" id="captureButton" type="button" disabled><span class="capture-button-icon"><svg id="captureButtonIcon" viewBox="0 0 24 24"><path d="M12 3v12M8 7v7a4 4 0 0 0 8 0V7M5 12a7 7 0 0 0 14 0M12 19v3M9 22h6"/></svg></span><span id="captureButtonLabel">Checking access…</span></button>
             </div>
             <div class="stats-strip">
-              <div class="stat-cell"><span>LINES</span><strong id="transcriptCount">0</strong></div>
+              <div class="stat-cell"><span>SAVED LINES</span><strong id="transcriptCount">0</strong></div>
               <div class="stat-cell"><span>TIME</span><strong id="sessionStat">00:00</strong></div>
               <div class="stat-cell"><span>DELIVERY</span><strong id="deliveryStat"><i class="stat-dot"></i>Ready</strong></div>
               <div class="stat-cell header-device-inline"><span>DEVICE</span><strong id="headerDeviceName">Desktop</strong></div>
             </div>
           </article>
           <p class="capture-error" id="captureError" role="alert" hidden></p>
+          <p class="service-notice" id="serviceNotice" role="status" hidden></p>
           <div class="approval-banner" id="approvalBanner" hidden role="status" aria-live="polite"><span id="approvalMessage">Waiting for admin approval. Recording is off until this device is approved.</span><button id="approvalRetry" type="button">Check status</button></div>
           <span class="heading-date" id="currentDate" hidden></span>
 
