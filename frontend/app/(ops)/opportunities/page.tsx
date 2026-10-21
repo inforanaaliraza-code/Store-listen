@@ -1,13 +1,11 @@
 'use client';
-import { OpportunityActions, ResourceTable } from '../../components/resource-table';
+import { ResourceTable } from '../../components/resource-table';
 export default function Page() {
   return (
-    <>
-      <OpportunityActions />
-      <ResourceTable
+    <ResourceTable
         title="Opportunities"
         eyebrow="SALES INTELLIGENCE"
-        description="Potential, converted, missed, and review-required outcomes. Confidence is shown; managers can override."
+        description="Potential, converted, missed, and review-required outcomes derived from recorded conversations. Confidence is shown for review."
         endpoint="/api/v1/opportunities"
         collection="opportunities"
         columns={[
@@ -20,6 +18,5 @@ export default function Page() {
           { key: 'recommendation', label: 'Tip' },
         ]}
       />
-    </>
   );
 }

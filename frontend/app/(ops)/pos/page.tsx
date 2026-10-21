@@ -1,13 +1,11 @@
 'use client';
-import { PosDemoButton, ResourceTable } from '../../components/resource-table';
+import { ResourceTable } from '../../components/resource-table';
 export default function Page() {
   return (
-    <>
-      <PosDemoButton />
-      <ResourceTable
+    <ResourceTable
         title="POS correlation"
         eyebrow="TRANSACTION MATCHING"
-        description="Mock POS transactions and probabilistic conversation matches. Matches are never claimed certain without a reliable identifier."
+        description="Imported point-of-sale transactions linked to conversations when reliable identifiers are available. Empty results mean no POS transactions have been connected."
         endpoint="/api/v1/pos/transactions"
         collection="transactions"
         columns={[
@@ -19,6 +17,5 @@ export default function Page() {
           { key: 'created_at', label: 'When' },
         ]}
       />
-    </>
   );
 }

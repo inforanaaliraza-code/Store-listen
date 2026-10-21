@@ -947,11 +947,20 @@ test('analytics is scoped and demo POS/replay data remains marked as non-live', 
   assert.equal(invalidWebhook.status, 422);
 
   testConfig.demoMode = false;
+  const previousPosProvider = testConfig.posProvider;
   try {
+    testConfig.posProvider = 'none';
+    const disconnectedWebhook = await fetch(`${baseUrl}/api/v1/pos/webhook`, {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ store_id: 'store-1', sku: 'SKU-1', name: 'Phone case', amount: 12.5 }),
+    });
+    assert.equal(disconnectedWebhook.status, 503);
     const rejected = await fetch(`${baseUrl}/api/v1/pos/demo`, { method: 'POST', headers });
     assert.equal(rejected.status, 409);
   } finally {
     testConfig.demoMode = true;
+    testConfig.posProvider = previousPosProvider;
   }
 
   const replay = await fetch(`${baseUrl}/api/v1/demo/replay`, {

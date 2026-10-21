@@ -199,7 +199,7 @@ export function ResourceTable({ title, eyebrow, description, endpoint, collectio
       </div>
       {actionError ? <div className="banner resource-error" role="alert">{actionError}</div> : null}
       <article className="panel">
-        {filtered.length === 0 ? <div className="empty"><strong>No matching records</strong><p>Try another filter or replay the live demo.</p></div> : (
+        {filtered.length === 0 ? <div className="empty"><strong>No matching records</strong><p>Records appear here after live data is received or entered.</p></div> : (
             <table className="table">
             <thead><tr>{columns.map((col) => <th key={col.key}>{col.label}</th>)}{manage && canManage ? <th>Actions</th> : null}</tr></thead>
             <tbody>
@@ -220,57 +220,6 @@ export function ResourceTable({ title, eyebrow, description, endpoint, collectio
         )}
       </article>
       {payload && !collection ? <pre className="panel" style={{ marginTop: 12, overflow: 'auto', fontSize: 12 }}>{JSON.stringify(payload, null, 2)}</pre> : null}
-    </div>
-  );
-}
-
-export function OpportunityActions() {
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  async function mark(id: string, status: 'REVIEW_REQUIRED' | 'MISSED' | 'CONVERTED') {
-    setBusy(true);
-    setError('');
-    try {
-      await apiPatch(`/api/v1/opportunities/${id}`, { status, manager_note: 'Manager override from dashboard' });
-      window.location.reload();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Unable to update opportunity');
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className="banner" style={{ marginBottom: 12 }}>
-      Managers can override AI classifications. Never treat MISSED as an automatic personnel finding.
-      {error ? <p role="alert" style={{ marginBottom: 0 }}>{error}</p> : null}
-      <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-        <button className="ghost" disabled={busy} onClick={() => void mark('opp-2002', 'REVIEW_REQUIRED')}>{busy ? 'Saving…' : 'Send cable case to review'}</button>
-      </div>
-    </div>
-  );
-}
-
-export function PosDemoButton() {
-  const [note, setNote] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  async function simulateSale() {
-    setBusy(true);
-    setError('');
-    try {
-      const result = await apiPost<{ transaction: { id: string }; match: { conversation_id: string } | null }>('/api/v1/pos/demo');
-      setNote(`Simulated ${result.transaction.id}${result.match ? ` · matched ${result.match.conversation_id}` : ''}`);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Unable to simulate a sale');
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className="toolbar">
-      <button className="ghost" disabled={busy} onClick={() => void simulateSale()}>{busy ? 'Sending…' : 'Simulate USB-C sale'}</button>
-      <span className="chip" aria-live="polite">{error || note || 'MockPOSProvider only'}</span>
     </div>
   );
 }

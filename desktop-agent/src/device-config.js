@@ -7,7 +7,7 @@
 
   function isDeviceSessionExpired(error) {
     const message = error instanceof Error ? error.message : String(error ?? '');
-    return /invalid or expired session/i.test(message);
+    return /invalid or expired (?:device )?session|invalid or expired device|invalid device credentials/i.test(message);
   }
 
   const deviceConfig = { isDeviceSessionExpired, migrateSavedApiBase };

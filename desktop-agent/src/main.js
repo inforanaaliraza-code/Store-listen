@@ -351,3 +351,4 @@ app.on('window-all-closed', () => {
 });
 
 ipcMain.handle('app-config', () => applicationConfig());
+ipcMain.handle('app-version', () => app.getVersion());

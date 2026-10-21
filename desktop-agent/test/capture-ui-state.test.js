@@ -27,14 +27,32 @@ test('approval failures explain authentication, server, and network errors safel
 });
 
 test('approved device stays blocked when live transcription is not configured', () => {
-  const ui = getCaptureUiState({ approvalStatus: 'approved', transcriptionAvailable: false });
+  const ui = getCaptureUiState({ approvalStatus: 'approved', transcriptionAvailable: false, deploymentMode: 'live' });
   assert.equal(ui.buttonDisabled, true);
   assert.match(ui.message, /Deepgram/);
 });
 
+test('demo and old APIs cannot start capture', () => {
+  const demo = getCaptureUiState({
+    approvalStatus: 'approved',
+    transcriptionAvailable: true,
+    deploymentMode: 'demo',
+  });
+  const oldApi = getCaptureUiState({ approvalStatus: 'approved', transcriptionAvailable: null });
+  assert.equal(demo.buttonDisabled, true);
+  assert.match(demo.message, /demo mode/i);
+  assert.equal(oldApi.buttonDisabled, true);
+});
+
 test('approved device gets an explicit start state and can manually pause/resume', () => {
-  const ready = getCaptureUiState({ approvalStatus: 'approved' });
-  const paused = getCaptureUiState({ approvalStatus: 'approved', manuallyStopped: true, ended: true });
+  const ready = getCaptureUiState({ approvalStatus: 'approved', transcriptionAvailable: true, deploymentMode: 'live' });
+  const paused = getCaptureUiState({
+    approvalStatus: 'approved',
+    transcriptionAvailable: true,
+    deploymentMode: 'live',
+    manuallyStopped: true,
+    ended: true,
+  });
 
   assert.equal(ready.buttonDisabled, false);
   assert.equal(ready.buttonLabel, 'Start recording');
@@ -51,7 +69,8 @@ test('start and stop progress states disable duplicate actions', () => {
 test('delivery status never claims ready when approval or transcription is blocked', () => {
   assert.equal(getDeliveryStatus({ approvalStatus: 'unknown', approvalCheckFailed: true }), 'Check connection');
   assert.equal(getDeliveryStatus({ approvalStatus: 'pending' }), 'Waiting approval');
-  assert.equal(getDeliveryStatus({ approvalStatus: 'approved', transcriptionAvailable: false }), 'Unavailable');
+  assert.equal(getDeliveryStatus({ approvalStatus: 'approved', transcriptionAvailable: false, deploymentMode: 'live' }), 'Unavailable');
+  assert.equal(getDeliveryStatus({ approvalStatus: 'approved', deploymentMode: 'demo' }), 'Live service required');
   assert.equal(getDeliveryStatus({ approvalStatus: 'approved', recording: true }), 'Live');
   assert.equal(getDeliveryStatus({ approvalStatus: 'approved', ended: true }), 'Ended');
 });

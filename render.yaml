@@ -14,7 +14,7 @@ services:
       - key: APP_ENV
         value: production
       - key: DEMO_MODE
-        value: "true"
+        value: "false"
       - key: MONGODB_URI
         sync: false
       - key: MONGO_DATABASE_NAME
@@ -30,7 +30,7 @@ services:
       - key: DEEPL_API_KEY
         sync: false
       - key: POS_PROVIDER
-        value: mock
+        value: none
       - key: STORAGE_PROVIDER
         value: gridfs
       - key: AUDIO_RETENTION_DAYS

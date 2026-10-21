@@ -13,6 +13,8 @@ const productionEnvironment = {
   MONGODB_URI: 'mongodb+srv://test:test@cluster.example.invalid/storelisten',
   DEEPGRAM_API_KEY: 'test-deepgram-key',
   STORAGE_PROVIDER: 'gridfs',
+  DEMO_MODE: 'false',
+  POS_PROVIDER: 'none',
 };
 
 function loadConfiguration(environment) {
@@ -31,6 +33,14 @@ test('production config fails closed without Deepgram or durable GridFS storage'
   const localAudioStorage = loadConfiguration({ ...productionEnvironment, STORAGE_PROVIDER: 'local' });
   assert.notEqual(localAudioStorage.status, 0);
   assert.match(localAudioStorage.stderr, /STORAGE_PROVIDER=gridfs is required in production/);
+
+  const demoMode = loadConfiguration({ ...productionEnvironment, DEMO_MODE: 'true' });
+  assert.notEqual(demoMode.status, 0);
+  assert.match(demoMode.stderr, /DEMO_MODE must be false in production/);
+
+  const mockPos = loadConfiguration({ ...productionEnvironment, POS_PROVIDER: 'mock' });
+  assert.notEqual(mockPos.status, 0);
+  assert.match(mockPos.stderr, /POS_PROVIDER=mock is not allowed in production/);
 
   const validProductionConfig = loadConfiguration(productionEnvironment);
   assert.equal(validProductionConfig.status, 0, validProductionConfig.stderr);

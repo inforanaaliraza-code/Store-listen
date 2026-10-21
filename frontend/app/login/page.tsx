@@ -1,23 +1,57 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
-import { apiPostWithWake, setToken, wakeApi } from '../../lib/api';
+import { apiGet, apiPostWithWake, setToken, wakeApi } from '../../lib/api';
 import { BrandLogo } from '../components/brand-logo';
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('admin@storelisten.demo');
-  const [password, setPassword] = useState('StoreListen!2026');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [waking, setWaking] = useState(true);
+  const [serviceReady, setServiceReady] = useState(false);
+  const [serviceMessage, setServiceMessage] = useState('Checking live production services…');
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
 
   useEffect(() => {
     let alive = true;
-    void wakeApi().finally(() => {
-      if (alive) setWaking(false);
-    });
+    setWaking(true);
+    setServiceReady(false);
+    void (async () => {
+      try {
+        const reachable = await wakeApi();
+        if (!reachable) throw new Error('The Store Listen API is unavailable. Check the deployment and try again.');
+        const readiness = await apiGet<{
+          status: string;
+          mode: string;
+          database: string;
+          capabilities?: { transcription?: string };
+        }>('/ready');
+        if (readiness.status !== 'ready' || readiness.database !== 'connected') {
+          throw new Error('The API database is not ready. Try again after the administrator checks the service.');
+        }
+        if (readiness.mode !== 'live') {
+          throw new Error('Live sign-in is disabled because this API is running in demo mode. The administrator must deploy DEMO_MODE=false.');
+        }
+        if (readiness.capabilities?.transcription !== 'available') {
+          throw new Error('Live transcription is not configured on the API. The administrator must configure Deepgram before sign-in.');
+        }
+        if (alive) {
+          setServiceReady(true);
+          setServiceMessage('Live production services are ready.');
+        }
+      } catch (cause) {
+        if (alive) {
+          setServiceReady(false);
+          setServiceMessage(cause instanceof Error ? cause.message : 'Unable to verify live production services.');
+        }
+      } finally {
+        if (alive) setWaking(false);
+      }
+    })();
     return () => { alive = false; };
-  }, []);
+  }, [connectionAttempt]);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -49,20 +83,20 @@ export default function LoginPage() {
           <div className="side" />
         </div>
         <p style={{ color: 'var(--muted)', maxWidth: 420 }}>
-          Demo environment. Insights are AI-assisted estimates, not determinations. Mock speech, AI, and POS providers are labeled as demo.
+          Secure access to live store conversations, verified transcripts, and operational reporting.
         </p>
       </section>
       <section className="login-panel">
         <form className="auth-card" onSubmit={onSubmit}>
           <span className="eyebrow">OPERATOR ACCESS</span>
           <h1 className="serif">Sign in</h1>
-          <p>Use the seeded operations account to inspect live intelligence, reports, and POS correlation.</p>
-          <label className="field">Email<input value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="username" /></label>
-          <label className="field">Password<input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="current-password" /></label>
-          {waking ? <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--muted)' }}>Waking cloud API…</p> : null}
+          <p>Sign in with the account provided by your Store Listen administrator.</p>
+          <label className="field">Email<input value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="username" required /></label>
+          <label className="field">Password<input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="current-password" required /></label>
+          {waking ? <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--muted)' }}>Checking live production connection…</p> : <p role={serviceReady ? 'status' : 'alert'} style={{ margin: '0 0 10px', fontSize: 12, color: serviceReady ? 'var(--brand)' : 'var(--muted)' }}>{serviceMessage}</p>}
           {error ? <div className="error">{error}</div> : null}
-          <button className="primary" disabled={busy} type="submit">{busy ? 'Signing in…' : 'Enter operations'}</button>
-          <p style={{ marginTop: 16, fontSize: 12, color: 'var(--muted)' }}>admin@storelisten.demo · StoreListen!2026</p>
+          <button className="primary" disabled={busy || waking || !serviceReady} type="submit">{busy ? 'Signing in…' : 'Enter operations'}</button>
+          {!waking && !serviceReady ? <button className="ghost" style={{ marginTop: 10, width: '100%' }} type="button" onClick={() => setConnectionAttempt((attempt) => attempt + 1)}>Retry connection</button> : null}
         </form>
       </section>
     </main>

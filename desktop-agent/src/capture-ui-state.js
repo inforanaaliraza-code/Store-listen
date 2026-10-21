@@ -23,6 +23,7 @@
     approvalStatus = 'unknown',
     approvalCheckFailed = false,
     transcriptionAvailable = null,
+    deploymentMode = 'unknown',
     ended = false,
   } = {}) {
     if (recording) return 'Live';
@@ -32,7 +33,9 @@
     if (approvalCheckFailed || approvalStatus === 'unknown') return 'Check connection';
     if (approvalStatus === 'rejected') return 'Blocked';
     if (approvalStatus !== 'approved') return 'Waiting approval';
+    if (deploymentMode === 'demo') return 'Live service required';
     if (transcriptionAvailable === false) return 'Unavailable';
+    if (transcriptionAvailable !== true) return 'Checking service';
     return 'Ready';
   }
 
@@ -44,6 +47,7 @@
     approvalCheckFailed = false,
     approvalCheckError = '',
     transcriptionAvailable = null,
+    deploymentMode = 'unknown',
     manuallyStopped = false,
     ended = false,
   } = {}) {
@@ -98,6 +102,16 @@
         buttonTitle: 'An administrator must approve this device before recording.',
       };
     }
+    if (deploymentMode === 'demo') {
+      return {
+        indicator: 'BLOCKED',
+        title: 'Production service is not configured',
+        message: 'The API is in demo mode. Recording is disabled until the production service is deployed.',
+        buttonLabel: 'Live service required',
+        buttonDisabled: true,
+        buttonTitle: 'Demo services cannot receive store recordings.',
+      };
+    }
     if (transcriptionAvailable === false) {
       return {
         indicator: 'OFFLINE',
@@ -106,6 +120,16 @@
         buttonLabel: 'Transcription unavailable',
         buttonDisabled: true,
         buttonTitle: 'Live transcription requires a configured Deepgram API key.',
+      };
+    }
+    if (transcriptionAvailable !== true) {
+      return {
+        indicator: 'CHECK',
+        title: 'Checking transcription service',
+        message: 'Waiting for the API to confirm that live transcription is configured.',
+        buttonLabel: 'Checking service…',
+        buttonDisabled: true,
+        buttonTitle: 'Capture is disabled until live transcription is confirmed.',
       };
     }
     if (approvalStatus !== 'approved') {

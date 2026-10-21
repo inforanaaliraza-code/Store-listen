@@ -8,8 +8,8 @@ The root `render.yaml` defines the Node.js/Express API and the Vite static front
 2. In Render, create or sync the Blueprint using this repository's root `render.yaml`. The API build installs the standalone backend lockfile with `npm ci --workspaces=false`, so it does not accidentally use the monorepo workspace lock.
 3. Set `MONGODB_URI` and `DEEPGRAM_API_KEY` in the API service's private environment settings. Rotate any Deepgram key that was pasted into chat or otherwise exposed before adding a replacement.
 4. Set `DEEPL_API_KEY` only if Spanish-to-English translation is required; it is optional. The app's coaching, transcript analysis, and daily summaries are deterministic phrase rules and verified aggregates, not generative AI.
-5. The Blueprint generates `JWT_SECRET`, sets `STORAGE_PROVIDER=gridfs`, and keeps `DEMO_MODE=true` with mock POS data for safe testing. Do not use demo mode or mock records for customer reporting. Before live operations, set `DEMO_MODE=false` in the API service after configuring live integrations and data. The desktop labels demo mode and disables capture when the API reports that transcription is unavailable.
-6. Wait for the API deployment to pass `/ready`, then check the frontend and verify login, a live Deepgram transcription, WebSocket transcript delivery, report generation, and audio upload/read/delete against the deployed services.
+5. The Blueprint generates `JWT_SECRET`, sets `STORAGE_PROVIDER=gridfs`, and deploys with `DEMO_MODE=false`. Production startup refuses demo mode and mock POS. Until a supported POS integration is configured, `POS_PROVIDER=none` keeps sales ingestion disabled rather than fabricating transactions.
+6. Set a real `DEEPGRAM_API_KEY` and `MONGODB_URI` privately in Render, then wait for the API deployment to pass `/ready` with `mode=live`, a connected database, and `capabilities.transcription=available`. Verify login, device approval, live Deepgram transcription, WebSocket transcript delivery, report generation, and audio upload/read/delete against the deployed services.
 
 The current frontend build is configured for `https://store-listen-api-z8yb.onrender.com` and `wss://store-listen-api-z8yb.onrender.com`. If Render assigns different hostnames, update the API CORS origin and both `VITE_API_URL`/`VITE_WS_URL`, then redeploy the frontend because Vite values are embedded at build time.
 
@@ -24,15 +24,16 @@ Required for production:
 - `JWT_SECRET` (unique; at least 32 characters)
 - `DEEPGRAM_API_KEY`
 - `STORAGE_PROVIDER=gridfs`
+- `DEMO_MODE=false`
 - `CORS_ORIGINS` (exact frontend HTTPS origin)
 
 Optional:
 
 - `DEEPL_API_KEY` and `DEEPL_API_URL` for translation
-- `POS_PROVIDER` (currently only mock/demo POS is available)
+- `POS_PROVIDER=none` until an actual POS integration is implemented and configured
 - `AUDIO_RETENTION_DAYS` and `TRANSCRIPT_RETENTION_DAYS`
 
-Production startup fails closed when the Mongo URI, production JWT secret, Deepgram key, or GridFS storage mode is missing. Render Free may sleep, has limited CPU/RAM, and cannot provide always-on real-time capture; use a paid service for dependable production operation. MongoDB Atlas and Deepgram have their own availability, capacity, and billing limits.
+Production startup fails closed when the Mongo URI, production JWT secret, Deepgram key, or GridFS storage mode is missing, or if demo mode/mock POS is enabled. No POS vendor connector is currently configured; do not treat empty sales data as connected POS data. Render Free may sleep, has limited CPU/RAM, and cannot provide always-on real-time capture; use a paid service for dependable production operation. MongoDB Atlas and Deepgram have their own availability, capacity, and billing limits.
 
 ## Desktop
 

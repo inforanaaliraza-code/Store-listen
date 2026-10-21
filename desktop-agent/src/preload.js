@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('storeListen', {
   getAppConfig: () => ipcRenderer.invoke('app-config'),
+  getAppVersion: () => ipcRenderer.invoke('app-version'),
   request: (options) => ipcRenderer.invoke('api-request', options),
   uploadAudio: (payload) => ipcRenderer.invoke('audio-upload', payload),
   previewAudio: (payload) => ipcRenderer.invoke('audio-preview', payload),

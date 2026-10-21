@@ -67,6 +67,7 @@ const state = {
   approvalRefreshPromise: null,
   transcriptionAvailable: null,
   apiOnline: null,
+  deploymentMode: 'unknown',
   captureStarting: '',
   approvalTimer: null,
   waveformFrame: 0,
@@ -254,6 +255,7 @@ function showWorkspace(config) {
   state.captureStarting = '';
   state.transcriptionAvailable = null;
   state.apiOnline = null;
+  state.deploymentMode = 'unknown';
   renderLiveCoaching(null, 'Ready when conversation starts');
   setupScreen.hidden = true;
   appScreen.hidden = false;
@@ -303,23 +305,32 @@ function setApiStatus(online, readiness = null) {
   state.apiOnline = online;
   const status = $('#apiStatus');
   if (readiness) {
+    state.deploymentMode = readiness.mode || 'unknown';
     state.transcriptionAvailable = readiness.capabilities?.transcription
       ? readiness.capabilities.transcription === 'available'
       : null;
   }
-  const label = !online ? 'Unavailable' : readiness?.mode === 'demo' ? 'Demo API' : 'API available';
-  const html = `<i class="status-dot${online && state.transcriptionAvailable !== false ? '' : ' bad'}"></i>${label}`;
+  const label = !online
+    ? 'Unavailable'
+    : state.deploymentMode === 'demo'
+      ? 'Demo blocked'
+      : state.deploymentMode === 'live' && state.transcriptionAvailable === true
+        ? 'Live API'
+        : 'Setup required';
+  const isOperational = online && state.deploymentMode === 'live' && state.transcriptionAvailable === true;
+  const html = `<i class="status-dot${isOperational ? '' : ' bad'}"></i>${label}`;
   if (status.innerHTML !== html) status.innerHTML = html;
   status.title = !online
     ? 'The API readiness check failed.'
     : state.transcriptionAvailable === false
       ? 'The API is reachable, but live transcription is not configured.'
-      : readiness?.mode === 'demo'
-        ? 'Connected to the API in demo mode; data may be sample data.'
+      : state.deploymentMode === 'demo'
+        ? 'Demo mode is blocked. Configure the production API before using recording.'
         : 'The API and database are available.';
   const notices = [];
-  if (online && readiness?.mode === 'demo') notices.push('Demo mode is enabled: displayed store activity may be sample data, not live customer activity.');
+  if (online && state.deploymentMode === 'demo') notices.push('Demo mode is enabled. This app will not record or display store data until the API is configured for live production use.');
   if (online && state.transcriptionAvailable === false) notices.push('Live transcription is unavailable. Ask the administrator to configure Deepgram on the API service.');
+  if (online && state.transcriptionAvailable === null) notices.push('This API version does not confirm live transcription capability. Deploy the current backend before using this desktop app.');
   const notice = $('#serviceNotice');
   notice.textContent = notices.join(' ');
   notice.hidden = notices.length === 0;
@@ -332,10 +343,10 @@ async function checkApi() {
   try {
     const readiness = await request('/ready');
     if (readiness.status !== 'ready' || readiness.database !== 'connected') {
-      throw new Error('Store Listen API is not ready.');
+      throw new Error('The API is not ready or needs a production update.');
     }
     setApiStatus(true, readiness);
-    return true;
+    return readiness.mode === 'live' && readiness.capabilities?.transcription === 'available';
   } catch {
     setApiStatus(false);
     // Render may be waking up or redeploying: look again in 4s instead of waiting a full cycle.
@@ -599,6 +610,7 @@ function setCaptureUi(recording, busy = false, ended = false) {
     approvalCheckFailed: state.approvalCheckFailed,
     approvalCheckError: state.approvalCheckError,
     transcriptionAvailable: state.transcriptionAvailable,
+    deploymentMode: state.deploymentMode,
     manuallyStopped: isManuallyStopped(),
     ended,
   });
@@ -621,6 +633,7 @@ function setCaptureUi(recording, busy = false, ended = false) {
     approvalStatus: state.approvalStatus,
     approvalCheckFailed: state.approvalCheckFailed,
     transcriptionAvailable: state.transcriptionAvailable,
+    deploymentMode: state.deploymentMode,
     ended,
   });
   $('#deliveryStat').innerHTML = `<i class="stat-dot${['Offline', 'Blocked', 'Unavailable', 'Check connection'].includes(delivery) ? ' pending' : ''}"></i>${delivery}`;
@@ -1710,6 +1723,7 @@ $('#transcriptArchiveList').addEventListener('click', async (event) => {
 async function initialize() {
   setManuallyStopped(false);
   try {
+    $('#appVersion').textContent = `v${await window.storeListen.getAppVersion()}`;
     const application = await window.storeListen.getAppConfig();
     state.apiBase = application.apiBase;
     const apiAddress = $('#apiBase');

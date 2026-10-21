@@ -33,8 +33,26 @@ type SettingsData = {
 };
 
 function Status({ value }: { value: string }) {
-  const healthy = ['connected', 'online', 'active', 'enabled', 'complete'].includes(value.toLowerCase());
-  return <span className={`settings-status ${healthy ? 'healthy' : 'neutral'}`}><i />{value.replaceAll('_', ' ')}</span>;
+  const normalized = value.toLowerCase();
+  const healthy = ['connected', 'online', 'active', 'enabled', 'complete', 'configured', 'rules'].includes(normalized);
+  const label = normalized === 'none' ? 'not connected' : value.replaceAll('_', ' ');
+  return <span className={`settings-status ${healthy ? 'healthy' : 'neutral'}`}><i />{label}</span>;
+}
+
+function providerStatus(provider: string) {
+  if (provider === 'mock') return 'demo disabled';
+  if (provider === 'none') return 'not connected';
+  if (provider === 'rules') return 'active';
+  return 'configured';
+}
+
+function providerDescription(kind: string, provider: string) {
+  if (provider === 'mock') return 'Mock providers are not production integrations and must not supply customer records.';
+  if (provider === 'none') return kind === 'pos'
+    ? 'No point-of-sale provider is connected. Sales data will remain unavailable until a live integration is configured.'
+    : 'No provider is configured.';
+  if (provider === 'rules') return 'Deterministic local rules analyze verified conversation and transaction data.';
+  return 'Provider is selected in this environment; verify its credentials and live connection.';
 }
 
 export default function SettingsPage() {
@@ -73,7 +91,7 @@ export default function SettingsPage() {
         </div>
         <button className="ghost owner-button" onClick={() => void load()} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh status'}</button>
       </div>
-      <div className="settings-notice"><strong>{data?.demo_mode ? 'Demo configuration' : 'Workspace configuration'}</strong><span>These settings are read-only here. Changes to providers, access, or retention require an approved production setup.</span></div>
+      <div className="settings-notice"><strong>{data?.demo_mode ? 'Demo mode is enabled' : 'Production workspace'}</strong><span>{data?.demo_mode ? 'This service must not be used for live customer operations. Configure and deploy with DEMO_MODE=false.' : 'Settings reflect the active server configuration. Provider credentials are managed privately in the deployment environment.'}</span></div>
       <nav className="settings-tabs" aria-label="Settings sections">
         {tabs.map((tab) => (
           <Link aria-current={active === tab.key ? 'page' : undefined} className={`settings-tab${active === tab.key ? ' active' : ''}`} key={tab.href} href={tab.href}>{tab.label}</Link>
@@ -103,7 +121,7 @@ export default function SettingsPage() {
             <div className="settings-provider-list">
               <div><span>Speech recognition</span><strong>{data.providers.speech}</strong><Status value="active" /></div>
               <div><span>AI analysis</span><strong>{data.providers.ai}</strong><Status value={data.providers.ai === 'mock' ? 'demo' : 'configured'} /></div>
-              <div><span>POS connection</span><strong>{data.providers.pos}</strong><Status value={data.providers.pos === 'mock' ? 'demo' : 'configured'} /></div>
+              <div><span>POS connection</span><strong>{data.providers.pos}</strong><Status value={providerStatus(data.providers.pos)} /></div>
               <div><span>Audio storage</span><strong>{data.providers.storage}</strong><Status value="active" /></div>
             </div>
           </article>
@@ -132,8 +150,8 @@ export default function SettingsPage() {
 
       {data && active === 'integrations' ? <section className="settings-panel">
         <div className="settings-panel-head"><div><span className="eyebrow">CONNECTED SYSTEMS</span><h2>Integrations</h2><p>Provider selection and connection records currently available in this environment.</p></div></div>
-        <div className="settings-integration-grid">{Object.entries(data.providers).map(([kind, provider]) => <article className="settings-integration" key={kind}><span>{kind}</span><strong>{provider}</strong><Status value={provider === 'mock' ? 'demo mode' : 'configured'} /><small>{provider === 'mock' ? 'Demo adapter; live vendor credentials are not connected.' : 'Provider is selected in this environment.'}</small></article>)}</div>
-        {data.integrations.length ? <div className="settings-record-list">{data.integrations.map((item, index) => <article className="settings-record" key={`${item.kind}-${index}`}><div className="settings-record-main"><strong>{item.kind}</strong><small>{item.provider} · {item.notes || 'No connection notes'}</small></div><Status value={item.status} /></article>)}</div> : <div className="settings-empty compact"><strong>No vendor connection records</strong><p>Live POS and AI credentials are not configured from this demo screen.</p></div>}
+        <div className="settings-integration-grid">{Object.entries(data.providers).map(([kind, provider]) => <article className="settings-integration" key={kind}><span>{kind}</span><strong>{provider}</strong><Status value={providerStatus(provider)} /><small>{providerDescription(kind, provider)}</small></article>)}</div>
+        {data.integrations.length ? <div className="settings-record-list">{data.integrations.map((item, index) => <article className="settings-record" key={`${item.kind}-${index}`}><div className="settings-record-main"><strong>{item.kind}</strong><small>{item.provider} · {item.notes || 'No connection notes'}</small></div><Status value={item.status} /></article>)}</div> : <div className="settings-empty compact"><strong>No vendor connection records</strong><p>Provider credentials and connection status are managed by the administrator.</p></div>}
       </section> : null}
 
       {data && active === 'users' ? <section className="settings-panel">
@@ -144,7 +162,7 @@ export default function SettingsPage() {
 
       {data && active === 'ai' ? <section className="settings-overview-grid">
         <article className="settings-panel"><div className="settings-panel-head"><div><span className="eyebrow">VOICE PIPELINE</span><h2>Speech recognition</h2></div><Status value="active" /></div><dl className="settings-detail-list"><div><dt>Provider</dt><dd>{data.ai.speech_provider}</dd></div><div><dt>Allowed languages</dt><dd>English, Spanish, Hindi, and Urdu</dd></div><div><dt>Original transcript</dt><dd>{data.ai.supports_original_transcript ? 'Available' : 'Unavailable'}</dd></div><div><dt>English translation</dt><dd>{data.ai.supports_english_translation ? 'Available for Spanish speech' : 'Unavailable'}</dd></div></dl></article>
-        <article className="settings-panel"><div className="settings-panel-head"><div><span className="eyebrow">CONVERSATION INTELLIGENCE</span><h2>AI provider</h2></div><Status value={data.ai.provider === 'mock' ? 'demo' : 'configured'} /></div><dl className="settings-detail-list"><div><dt>Selected provider</dt><dd>{data.ai.provider}</dd></div></dl><p className="settings-note">{data.ai.provider_note}</p><p className="settings-caveat">AI recommendations are review prompts, not verified facts or employee performance scores.</p></article>
+        <article className="settings-panel"><div className="settings-panel-head"><div><span className="eyebrow">CONVERSATION INTELLIGENCE</span><h2>Analysis provider</h2></div><Status value={providerStatus(data.ai.provider)} /></div><dl className="settings-detail-list"><div><dt>Selected provider</dt><dd>{data.ai.provider}</dd></div></dl><p className="settings-note">{data.ai.provider_note}</p><p className="settings-caveat">Recommendations are review prompts, not verified facts or employee performance scores.</p></article>
       </section> : null}
 
       {data && active === 'security' ? <section className="settings-overview-grid">

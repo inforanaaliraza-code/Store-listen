@@ -22,7 +22,7 @@ export const config = Object.freeze({
   demoMode: process.env.DEMO_MODE === 'true',
   aiProvider: 'rules',
   speechProvider: 'deepgram',
-  posProvider: process.env.POS_PROVIDER || 'mock',
+  posProvider: process.env.POS_PROVIDER || 'none',
   storageProvider: process.env.STORAGE_PROVIDER || 'local',
   jwtSecret: process.env.JWT_SECRET || 'local-development-only-change-before-deploy',
   deepgramApiKey: process.env.DEEPGRAM_API_KEY || '',
@@ -49,6 +49,12 @@ if (config.appEnv === 'production' && (!process.env.JWT_SECRET || config.jwtSecr
 }
 if (config.appEnv === 'production' && config.storageProvider !== 'gridfs') {
   throw new Error('STORAGE_PROVIDER=gridfs is required in production for durable audio storage.');
+}
+if (config.appEnv === 'production' && config.demoMode) {
+  throw new Error('DEMO_MODE must be false in production. Demo data and replay are not allowed.');
+}
+if (config.appEnv === 'production' && config.posProvider === 'mock') {
+  throw new Error('POS_PROVIDER=mock is not allowed in production. Configure a live POS integration or use none.');
 }
 if (config.appEnv === 'production' && !config.deepgramApiKey) {
   throw new Error('DEEPGRAM_API_KEY is required in production.');

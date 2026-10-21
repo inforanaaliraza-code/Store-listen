@@ -32,5 +32,7 @@ test('development and invalid packaged configuration preserve the saved API host
 
 test('recognizes rejected device sessions without treating network errors as expired', () => {
   assert.equal(isDeviceSessionExpired(new Error('Invalid or expired session')), true);
+  assert.equal(isDeviceSessionExpired(new Error('Invalid or expired device session')), true);
+  assert.equal(isDeviceSessionExpired(new Error('Invalid device credentials')), true);
   assert.equal(isDeviceSessionExpired(new Error('fetch failed')), false);
 });

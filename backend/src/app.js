@@ -1913,6 +1913,9 @@ export function createApp({
 
   app.post('/api/v1/pos/webhook', authenticate, async (request, response, next) => {
     try {
+      if (config.posProvider === 'none') {
+        return response.status(503).json({ detail: 'No POS integration is configured. Configure a live POS provider before sending transactions.' });
+      }
       const storeId = requiredText(request.body, 'store_id', 64);
       const sku = requiredText(request.body, 'sku', 64);
       const name = requiredText(request.body, 'name', 160);
@@ -1929,7 +1932,7 @@ export function createApp({
         amount,
         currency: 'USD',
         occurred_at: new Date(),
-        provider: 'mock',
+        provider: config.posProvider,
       };
       await PosTransactionModel.create(transaction);
       await PosTransactionItemModel?.create({
