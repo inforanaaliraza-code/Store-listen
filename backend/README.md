@@ -16,7 +16,9 @@ The Node service loads `backend/.env` first and then the repository-root `.env`;
 
 Live transcription requires `DEEPGRAM_API_KEY`; Spanish-to-English translation uses optional `DEEPL_API_KEY`. Conversation analysis, coaching, and daily summaries use local phrase rules and verified database aggregates; they do not call a generative LLM. Treat phrase matches and opportunity labels as review signals, not proof of customer intent or employee performance. Daily reports state when live POS data is unavailable and never estimate revenue.
 
-Set `STORAGE_PROVIDER=gridfs`, `DEMO_MODE=false`, and a real POS provider (or `POS_PROVIDER=none` until one is connected) for deployment. Production startup refuses demo mode, mock POS, local audio storage, missing Deepgram credentials, or a missing production JWT secret. `STORAGE_PROVIDER=local`, demo replay, and mock POS are for isolated local development/tests only. With `POS_PROVIDER=none`, POS data ingestion is explicitly unavailable rather than accepting mock transactions.
+Set `STORAGE_PROVIDER=gridfs`, `DEMO_MODE=false`, and a real POS provider (or `POS_PROVIDER=none` until one is connected) for deployment. Production enforces live-only mode and refuses mock POS, local audio storage, missing Deepgram credentials, or a missing production JWT secret. `STORAGE_PROVIDER=local`, demo replay, and mock POS are for isolated local development/tests only. With `POS_PROVIDER=none`, POS data ingestion is explicitly unavailable rather than accepting mock transactions.
+
+Production always enforces live-only behavior: if a Render dashboard override sets `DEMO_MODE=true`, the backend logs a warning and ignores it rather than serving demo data or failing startup. Keep the Render value set to `false` as well, so the dashboard configuration matches the enforced runtime mode.
 
 Expired audio files and their metadata are removed in batches; expired transcript segments are also removed based on `TRANSCRIPT_RETENTION_DAYS`. The cleanup runs at startup and every 15 minutes. MongoDB GridFS and database quotas still need monitoring.
 

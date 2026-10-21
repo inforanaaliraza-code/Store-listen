@@ -110,8 +110,8 @@ export function OpsShell({ children }: { children: ReactNode }) {
           }
           attempt += 1;
           const delay = Math.min(1000 * (2 ** Math.min(attempt - 1, 5)), 30_000);
-          setServiceState('checking');
-          setServiceMessage(`The API is temporarily unavailable. Retrying automatically in ${Math.round(delay / 1000)} seconds…`);
+          setServiceState('unavailable');
+          setServiceMessage(`The API is not responding. Retrying automatically in ${Math.round(delay / 1000)} seconds; live records remain blocked until it recovers.`);
           await waitForRetry(delay, controller.signal);
         }
       }

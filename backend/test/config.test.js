@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const backendDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const configurationModule = "import('./src/config.js')";
+const configurationModule = "import('./src/config.js').then(({ config }) => console.log(JSON.stringify({ demoMode: config.demoMode })))";
 const productionEnvironment = {
   ...process.env,
   APP_ENV: 'production',
@@ -34,9 +34,10 @@ test('production config fails closed without Deepgram or durable GridFS storage'
   assert.notEqual(localAudioStorage.status, 0);
   assert.match(localAudioStorage.stderr, /STORAGE_PROVIDER=gridfs is required in production/);
 
-  const demoMode = loadConfiguration({ ...productionEnvironment, DEMO_MODE: 'true' });
-  assert.notEqual(demoMode.status, 0);
-  assert.match(demoMode.stderr, /DEMO_MODE must be false in production/);
+  const requestedDemoMode = loadConfiguration({ ...productionEnvironment, DEMO_MODE: 'true' });
+  assert.equal(requestedDemoMode.status, 0, requestedDemoMode.stderr);
+  assert.match(requestedDemoMode.stderr, /DEMO_MODE=true is ignored in production/);
+  assert.match(requestedDemoMode.stdout, /"demoMode":false/);
 
   const mockPos = loadConfiguration({ ...productionEnvironment, POS_PROVIDER: 'mock' });
   assert.notEqual(mockPos.status, 0);

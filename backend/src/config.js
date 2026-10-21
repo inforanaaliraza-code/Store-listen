@@ -13,13 +13,19 @@ const numberFromEnv = (name, fallback) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const appEnv = process.env.APP_ENV || 'development';
+const productionDemoModeRequested = appEnv === 'production' && process.env.DEMO_MODE === 'true';
+if (productionDemoModeRequested) {
+  console.warn('DEMO_MODE=true is ignored in production; live-only mode is enforced.');
+}
+
 export const config = Object.freeze({
-  appEnv: process.env.APP_ENV || 'development',
+  appEnv,
   host: process.env.HOST || '127.0.0.1',
   port: numberFromEnv('PORT', 8000),
   mongoUri: process.env.MONGODB_URI || '',
   mongoDatabaseName: process.env.MONGO_DATABASE_NAME || 'storelisten',
-  demoMode: process.env.DEMO_MODE === 'true',
+  demoMode: appEnv === 'production' ? false : process.env.DEMO_MODE === 'true',
   aiProvider: 'rules',
   speechProvider: 'deepgram',
   posProvider: process.env.POS_PROVIDER || 'none',
@@ -49,9 +55,6 @@ if (config.appEnv === 'production' && (!process.env.JWT_SECRET || config.jwtSecr
 }
 if (config.appEnv === 'production' && config.storageProvider !== 'gridfs') {
   throw new Error('STORAGE_PROVIDER=gridfs is required in production for durable audio storage.');
-}
-if (config.appEnv === 'production' && config.demoMode) {
-  throw new Error('DEMO_MODE must be false in production. Demo data and replay are not allowed.');
 }
 if (config.appEnv === 'production' && config.posProvider === 'mock') {
   throw new Error('POS_PROVIDER=mock is not allowed in production. Configure a live POS integration or use none.');
