@@ -17,6 +17,8 @@ export async function attachDeviceAudioSocket(socket, {
   device,
   conversation,
   sampleRate,
+  sessionOffsetSeconds = 0,
+  captureSequence = 0,
   deepgramApiKey,
   deeplApiKey,
   deeplApiUrl,
@@ -30,7 +32,7 @@ export async function attachDeviceAudioSocket(socket, {
   let queuedAudio = [];
   let queuedBytes = 0;
   let previewSequence = 0;
-  let captureSequence = 0;
+  let lastCaptureSequence = captureSequence;
   let finalizedParts = [];
   let processing = Promise.resolve();
   let stopRequested = false;
@@ -54,7 +56,7 @@ export async function attachDeviceAudioSocket(socket, {
     const endTime = Number.isFinite(lastPart.start) && Number.isFinite(lastPart.duration)
       ? lastPart.start + lastPart.duration
       : startTime;
-    const sequence = ++captureSequence;
+    const sequence = ++lastCaptureSequence;
 
     processing = processing.then(async () => {
       let english = utterance;
@@ -80,8 +82,8 @@ export async function attachDeviceAudioSocket(socket, {
         language: needsTranslation ? 'es' : 'en',
         original_text: utterance,
         translated_text: english === TRANSLATION_PENDING ? null : english,
-        start_time: Math.max(0, startTime),
-        end_time: Math.max(startTime, endTime),
+        start_time: Math.max(0, sessionOffsetSeconds + startTime),
+        end_time: Math.max(sessionOffsetSeconds + startTime, sessionOffsetSeconds + endTime),
         confidence: confidence ?? 0,
         is_final: true,
         created_at: now,
@@ -96,7 +98,7 @@ export async function attachDeviceAudioSocket(socket, {
         storeId: device.store_id,
         segmentId,
         captureSequence: sequence,
-        sessionOffsetSeconds: Math.max(0, startTime),
+        sessionOffsetSeconds: Math.max(0, sessionOffsetSeconds + startTime),
         speakerId: 'speaker-unknown',
         speakerLabel: 'Speaker',
         speakerRole: 'unknown',
@@ -125,8 +127,9 @@ export async function attachDeviceAudioSocket(socket, {
       event: 'transcript.partial',
       conversationId: conversation.id,
       storeId: device.store_id,
-      captureSequence: captureSequence + 1,
+      captureSequence: lastCaptureSequence + 1,
       previewSequence: ++previewSequence,
+      sessionOffsetSeconds: Math.max(0, sessionOffsetSeconds + (Number.isFinite(result.start) ? result.start : 0)),
       speakerLabel: 'Live transcript',
       language: spanish ? 'es' : 'en',
       originalText: result.transcript,

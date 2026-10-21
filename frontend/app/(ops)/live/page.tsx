@@ -22,6 +22,7 @@ type LiveEvent = {
   label?: string;
   captureSequence?: number;
   previewSequence?: number;
+  sessionOffsetSeconds?: number;
 };
 
 type Line = {
@@ -114,10 +115,13 @@ export default function LivePage() {
   const [activeByStore, setActiveByStore] = useState<Record<string, StreamCard>>({});
   const socketsRef = useRef<Map<string, WebSocket>>(new Map());
   const segmentIdsRef = useRef<Map<string, Set<string>>>(new Map());
+  const conversationStartsRef = useRef<Map<string, number>>(new Map());
   const acceptedIdsRef = useRef<string[]>([]);
   const pendingByStoreRef = useRef<Record<string, StreamCard>>({});
   const aliveRef = useRef(true);
   const retryRef = useRef<Map<string, number>>(new Map());
+  const retryTimersRef = useRef<Map<string, number>>(new Map());
+  const socketEpochRef = useRef(0);
   // Newest finished phrase and newest live-words answer per conversation, so a late answer never repaints.
   const finalSeqRef = useRef<Map<string, number>>(new Map());
   const previewSeqRef = useRef<Map<string, number>>(new Map());
@@ -162,6 +166,7 @@ export default function LivePage() {
       .sort((left, right) => left.at - right.at);
     const unique = recovered.filter((line, index) => recovered.findIndex((item) => item.id === line.id) === index);
     segmentIdsRef.current.set(storeId, new Set(unique.map((line) => line.id)));
+    conversationStartsRef.current.set(conversationId, Date.parse(startedAtIso) || Date.now());
     return unique;
   }, []);
 
@@ -246,6 +251,7 @@ export default function LivePage() {
         partial: '',
         deviceConnected: Boolean(storeMap[storeId]?.device_connected),
       };
+      conversationStartsRef.current.set(event.conversationId, card.startedAt);
       segmentIdsRef.current.set(storeId, new Set());
       if (!acceptedIdsRef.current.includes(storeId)) {
         acceptedIdsRef.current = [...acceptedIdsRef.current, storeId];
@@ -322,7 +328,11 @@ export default function LivePage() {
         translated: '',
         confidence: event.confidence || 0,
         final: true,
-        at: Date.parse(event.timestamp || '') || Date.now(),
+        at: conversationStartsRef.current.has(event.conversationId || '')
+          && Number.isFinite(event.sessionOffsetSeconds)
+          ? (conversationStartsRef.current.get(event.conversationId || '') || 0)
+            + Math.max(0, event.sessionOffsetSeconds || 0) * 1000
+          : Date.parse(event.timestamp || '') || Date.now(),
       };
     }
 
@@ -361,7 +371,8 @@ export default function LivePage() {
     });
   }, [storeMap]);
 
-  const connectStore = useCallback((storeId: string) => {
+  const connectStore = useCallback((storeId: string, epoch: number) => {
+    if (!aliveRef.current || epoch !== socketEpochRef.current) return;
     if (!WS_URL) {
       setError('This web release is missing its secure cloud connection URL. Contact your Store Listen administrator.');
       return;
@@ -383,14 +394,16 @@ export default function LivePage() {
       return;
     }
     socketsRef.current.set(storeId, socket);
+    let connected = false;
     const pingTimer = window.setInterval(() => {
       if (socket.readyState === WebSocket.OPEN) socket.send('ping');
     }, 15_000);
     socket.onopen = () => {
-      if (!aliveRef.current) {
+      if (!aliveRef.current || epoch !== socketEpochRef.current) {
         socket.close();
         return;
       }
+      connected = true;
       setConnectedCount((count) => count + 1);
       setError('');
       retryRef.current.set(storeId, 1000);
@@ -406,13 +419,19 @@ export default function LivePage() {
     socket.onclose = () => {
       window.clearInterval(pingTimer);
       if (socketsRef.current.get(storeId) === socket) socketsRef.current.delete(storeId);
-      setConnectedCount((count) => Math.max(0, count - 1));
-      if (!aliveRef.current) return;
+      if (connected && aliveRef.current && epoch === socketEpochRef.current) {
+        setConnectedCount((count) => Math.max(0, count - 1));
+      }
+      if (!aliveRef.current || epoch !== socketEpochRef.current) return;
       const delay = retryRef.current.get(storeId) || 1000;
-      retryRef.current.set(storeId, Math.min(delay * 2, 8000));
-      window.setTimeout(() => {
-        if (aliveRef.current) connectStore(storeId);
-      }, delay);
+      retryRef.current.set(storeId, Math.min(delay * 2, 30_000));
+      const previousTimer = retryTimersRef.current.get(storeId);
+      if (previousTimer) window.clearTimeout(previousTimer);
+      const timer = window.setTimeout(() => {
+        retryTimersRef.current.delete(storeId);
+        if (aliveRef.current && epoch === socketEpochRef.current) connectStore(storeId, epoch);
+      }, Math.round(delay * (0.75 + Math.random() * 0.5)));
+      retryTimersRef.current.set(storeId, timer);
     };
     socket.onerror = () => {
       if (socket.readyState !== WebSocket.OPEN) setError('Live connection interrupted. Reconnecting…');
@@ -478,10 +497,16 @@ export default function LivePage() {
 
   useEffect(() => {
     aliveRef.current = true;
-    stores.forEach((store) => connectStore(store.id));
+    const epoch = ++socketEpochRef.current;
+    stores.forEach((store) => connectStore(store.id, epoch));
     return () => {
       aliveRef.current = false;
-      socketsRef.current.forEach((socket) => socket.close());
+      socketEpochRef.current += 1;
+      retryTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      retryTimersRef.current.clear();
+      socketsRef.current.forEach((socket) => {
+        if (socket.readyState !== WebSocket.CONNECTING) socket.close();
+      });
       socketsRef.current.clear();
     };
     // Reconnect only when the store roster changes, not when callbacks refresh.

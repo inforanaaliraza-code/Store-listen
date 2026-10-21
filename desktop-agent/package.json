@@ -1,6 +1,6 @@
 {
   "name": "store-listen-desktop-agent",
-  "version": "1.5.13",
+  "version": "1.5.14",
   "private": true,
   "description": "Store Listen secure Windows capture agent",
   "main": "src/main.js",

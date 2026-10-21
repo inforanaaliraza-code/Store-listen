@@ -8,13 +8,29 @@
     return pcm;
   }
 
-  function createAudioSocket({ apiBase, deviceId, deviceSecret, conversationId, sampleRate, WebSocketClass = WebSocket }) {
+  function createAudioSocket({
+    apiBase,
+    deviceId,
+    deviceSecret,
+    conversationId,
+    sampleRate,
+    sessionOffsetSeconds,
+    captureSequence,
+    WebSocketClass = WebSocket,
+  }) {
     if (!deviceId || !deviceSecret || !conversationId) throw new Error('Device and conversation credentials are required.');
     if (!Number.isInteger(sampleRate) || sampleRate < 8000 || sampleRate > 96000) throw new Error('Unsupported microphone sample rate.');
     const url = new URL(apiBase);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.pathname = `/ws/audio/${encodeURIComponent(deviceId)}/${encodeURIComponent(conversationId)}`;
-    url.search = new URLSearchParams({ sample_rate: String(sampleRate) }).toString();
+    const params = new URLSearchParams({ sample_rate: String(sampleRate) });
+    if (Number.isFinite(sessionOffsetSeconds) && sessionOffsetSeconds > 0) {
+      params.set('session_offset_seconds', String(sessionOffsetSeconds));
+    }
+    if (Number.isInteger(captureSequence) && captureSequence > 0) {
+      params.set('capture_sequence', String(captureSequence));
+    }
+    url.search = params.toString();
 
     return new Promise((resolve, reject) => {
       const socket = new WebSocketClass(url.toString(), ['storelisten.v1', deviceSecret]);

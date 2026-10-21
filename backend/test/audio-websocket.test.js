@@ -28,6 +28,8 @@ test('device audio socket streams PCM, translates Spanish finals, persists, and 
     device: { id: 'device-1', store_id: 'store-1' },
     conversation: { id: 'conv-1', store_id: 'store-1' },
     sampleRate: 48000,
+    sessionOffsetSeconds: 6,
+    captureSequence: 14,
     deepgramApiKey: 'test-deepgram-key',
     deeplApiKey: 'test-deepl-key',
     deeplApiUrl: 'https://api-free.deepl.com',
@@ -71,7 +73,10 @@ test('device audio socket streams PCM, translates Spanish finals, persists, and 
   assert.equal(stored[0].translated_text, 'Hello, I need a charger.');
   assert.equal(published.at(-1).room, 'store:store-1');
   assert.equal(published.at(-1).event.englishText, 'Hello, I need a charger.');
-  assert.equal(published.at(-1).event.sessionOffsetSeconds, 2);
+  assert.equal(published.at(-1).event.sessionOffsetSeconds, 8);
+  assert.equal(published.at(-1).event.captureSequence, 15);
+  assert.equal(stored[0].start_time, 8);
+  assert.equal(client.sent.at(-1).captureSequence, 15);
   assert.equal(client.sent.at(-1).event, 'transcript.final');
 
   client.emit('message', JSON.stringify({ type: 'audio.stop' }), false);
@@ -89,6 +94,7 @@ test('audio stop flushes final speech that did not receive a speech-final bounda
     device: { id: 'device-1', store_id: 'store-1' },
     conversation: { id: 'conv-1', store_id: 'store-1' },
     sampleRate: 48000,
+    sessionOffsetSeconds: 4,
     deepgramApiKey: 'test-deepgram-key',
     deeplApiKey: '',
     deeplApiUrl: 'https://api-free.deepl.com',
@@ -119,6 +125,6 @@ test('audio stop flushes final speech that did not receive a speech-final bounda
 
   assert.equal(stored.length, 1);
   assert.equal(stored[0].original_text, 'I need help finding a charger.');
-  assert.equal(client.sent.find((event) => event.event === 'transcript.final').sessionOffsetSeconds, 8.5);
+  assert.equal(client.sent.find((event) => event.event === 'transcript.final').sessionOffsetSeconds, 12.5);
   assert.equal(client.sent.at(-1).event, 'audio.stopped');
 });

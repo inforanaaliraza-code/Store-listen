@@ -4,19 +4,19 @@
     minRms: 0.006,
     rmsThreshold: 0.009,
     peakThreshold: 0.028,
-    snr: 2.2,
+    snr: 1.8,
     minSpeechRatio: 0.2,
     minZcr: 0.008,
     maxZcr: 0.55,
     startFrames: 2,
-    endFrames: 6,
-    silenceHangoverMs: 380,
-    // One whole phrase per final upload; words stream live while the person is still talking.
-    maxSegmentMs: 5000,
-    minClipMs: 500,
+    endFrames: 8,
+    silenceHangoverMs: 850,
+    // Keep natural pauses inside one saved phrase while the live stream stays continuous.
+    maxSegmentMs: 10000,
+    minClipMs: 300,
     // Real speech must last this long inside a clip, otherwise it was a door slam or a cough.
-    minVoicedMs: 280,
-    previewIntervalMs: 1000,
+    minVoicedMs: 160,
+    previewIntervalMs: 700,
     livePreviewEnabled: true,
   });
 
@@ -68,8 +68,7 @@
     const strongEnough = rms >= rmsFloor || peak >= config.peakThreshold;
     if (!strongEnough) return false;
     if (ratio < config.minSpeechRatio) return false;
-    const rumble = ratio < 0.12 && zcr < 0.005 && peak < 0.04;
-    return !rumble;
+    return zcr >= config.minZcr && zcr <= config.maxZcr;
   }
 
   function shouldVoiceTrigger(samples, threshold = config.rmsThreshold, peakThreshold = config.peakThreshold) {
@@ -99,7 +98,7 @@
         const zcr = zeroCrossingRate(samples);
         const ratio = speechBandRatio(frequencyDb, sampleRate);
         if (!speaking) noiseRms = (noiseRms * 0.94) + (energy.rms * 0.06);
-        const rmsFloor = Math.max(config.minRms, noiseRms * config.snr);
+        const rmsFloor = Math.max(config.minRms, Math.min(noiseRms * config.snr, 0.012));
         // Loud noise alone is not speech: the frame must also have a speech-shaped spectrum.
         const voicedNow = isVoicedFrame(samples, frequencyDb, sampleRate, rmsFloor);
         if (voicedNow) {

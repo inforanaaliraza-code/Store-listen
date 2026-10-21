@@ -27,13 +27,13 @@ function spectrum(speechDb, noiseDb) {
 
 test('voice gate opens quickly and streams short live clips', () => {
   assert.ok(config.startFrames <= 2, 'open the gate within two voiced frames');
-  assert.ok(config.endFrames <= 6, 'end the phrase after a short pause');
-  assert.ok(config.silenceHangoverMs <= 450, 'do not hold a finished phrase');
+  assert.ok(config.endFrames <= 10, 'end the phrase after a natural pause');
+  assert.ok(config.silenceHangoverMs >= 700 && config.silenceHangoverMs <= 1000, 'retain natural pauses within a phrase');
   assert.equal(config.livePreviewEnabled, true, 'words stream live while the person is still speaking');
   assert.ok(config.previewIntervalMs <= 1100, 'live preview requests are throttled to protect transcription latency');
-  assert.ok(config.maxSegmentMs <= 5000 && config.maxSegmentMs >= 3000, 'final audio chunks are capped at five seconds');
-  assert.ok(config.minClipMs >= 400 && config.minClipMs <= 700, 'skip noise blips, keep real words');
-  assert.ok(config.minVoicedMs >= 200 && config.minVoicedMs <= 400, 'a clip needs real voiced time before it is uploaded');
+  assert.ok(config.maxSegmentMs <= 12_000 && config.maxSegmentMs >= 8_000, 'saved audio keeps complete short phrases');
+  assert.ok(config.minClipMs >= 250 && config.minClipMs <= 400, 'retain short words but reject clicks');
+  assert.ok(config.minVoicedMs >= 120 && config.minVoicedMs <= 220, 'a clip retains short genuine speech');
   assert.ok(config.minRms <= 0.008, 'soft store speech must still open the gate');
 
   const gate = createVoiceGate();
@@ -54,7 +54,7 @@ test('voice gate opens quickly and streams short live clips', () => {
     if (result.state === 'end') ended = true;
   }
   assert.equal(ended, false, 'very short pauses should not end a spoken phrase');
-  for (let frame = 8; frame < 40; frame += 1) {
+  for (let frame = 8; frame < 80; frame += 1) {
     if (gate.observe(hush, hushSpectrum, 48000, frame * (1000 / 60)).state === 'end') ended = true;
   }
   assert.equal(ended, true, 'a brief silence hangover should finalize the live clip');
@@ -67,6 +67,25 @@ test('quiet but real store-counter speech still opens the voice gate', () => {
   let started = false;
   for (let frame = 0; frame < 14; frame += 1) {
     if (gate.observe(quiet, mixed, 48000).state === 'start') started = true;
+  }
+  assert.equal(started, true);
+});
+
+test('quiet speech still opens after the gate adapts to a noisy room', () => {
+  const gate = createVoiceGate();
+  const roomNoise = tone(512, 0.04, 400);
+  const rumble = new Float32Array(256).fill(-100);
+  rumble[1] = -8;
+  rumble[2] = -8;
+  const quietSpeech = tone(512, 0.025, 13);
+  const voiceSpectrum = spectrum(-24, -62);
+  for (let frame = 0; frame < 80; frame += 1) {
+    gate.observe(roomNoise, rumble, 48000, frame * (1000 / 60));
+  }
+
+  let started = false;
+  for (let frame = 80; frame < 100; frame += 1) {
+    if (gate.observe(quietSpeech, voiceSpectrum, 48000, frame * (1000 / 60)).state === 'start') started = true;
   }
   assert.equal(started, true);
 });

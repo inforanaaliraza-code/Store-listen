@@ -27,7 +27,6 @@ export function openStoreSocket(storeId: string, token: string) {
     throw new Error('This web release is missing its secure cloud connection URL. Contact your Store Listen administrator.');
   }
   const url = new URL(`${WS_URL.replace(/\/+$/, '')}/ws/stores/${encodeURIComponent(storeId)}`);
-  if (token) url.searchParams.set('token', token);
   return new WebSocket(url.toString(), token ? ['storelisten.v1', token] : ['storelisten.v1']);
 }
 const TOKEN_KEY = 'sl_token';
@@ -168,7 +167,42 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return readJson<T>(response);
 }
 
-export const apiGet = <T>(path: string, options?: Pick<RequestInit, 'signal'>) => request<T>(path, options);
+function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const timer = globalThis.setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, delayMs);
+    const abort = () => {
+      globalThis.clearTimeout(timer);
+      reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
+export async function apiGet<T>(path: string, options?: Pick<RequestInit, 'signal'>): Promise<T> {
+  const signal = options?.signal ?? undefined;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+    try {
+      return await request<T>(path, options);
+    } catch (cause) {
+      lastError = cause;
+      const retryable = cause instanceof ApiError
+        && (cause.code === 'NETWORK_ERROR' || cause.code === 'TIMEOUT' || cause.status >= 500 || cause.status === 0);
+      if (!retryable || attempt === 3) throw cause;
+      if (attempt === 0) await wakeApi(signal);
+      await waitForRetry(Math.min(1000 * (attempt + 1), 3000), signal);
+    }
+  }
+  throw lastError;
+}
 
 /** Wake a cold Render free-tier API before Live Monitor / ops calls. */
 export async function wakeApi(signal?: AbortSignal): Promise<boolean> {

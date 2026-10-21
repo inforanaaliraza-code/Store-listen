@@ -34,3 +34,34 @@ test('creates authenticated audio websocket with the exact microphone sample rat
   assert.equal(socketUrl, 'wss://api.example.com/ws/audio/device%201/conv%201?sample_rate=48000');
   assert.deepEqual(socketProtocols, ['storelisten.v1', 'device-secret']);
 });
+
+test('preserves the capture timeline when reconnecting a live audio socket', async () => {
+  let socketUrl;
+  let fakeSocket;
+  class FakeWebSocket {
+    static OPEN = 1;
+    readyState = 0;
+    handlers = {};
+    constructor(url) { socketUrl = url; fakeSocket = this; }
+    addEventListener(name, handler) { this.handlers[name] = handler; }
+    close() { this.readyState = 3; }
+  }
+
+  const promise = createAudioSocket({
+    apiBase: 'https://api.example.com',
+    deviceId: 'device-1',
+    deviceSecret: 'device-secret',
+    conversationId: 'conv-1',
+    sampleRate: 48000,
+    sessionOffsetSeconds: 12.5,
+    captureSequence: 7,
+    WebSocketClass: FakeWebSocket,
+  });
+  fakeSocket.readyState = FakeWebSocket.OPEN;
+  fakeSocket.handlers.open();
+  await promise;
+  assert.equal(
+    socketUrl,
+    'wss://api.example.com/ws/audio/device-1/conv-1?sample_rate=48000&session_offset_seconds=12.5&capture_sequence=7',
+  );
+});

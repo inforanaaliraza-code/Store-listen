@@ -51,6 +51,7 @@ export function createApp({
   app.use(helmet());
   app.use(cors({
     credentials: true,
+    maxAge: 600,
     origin(origin, callback) {
       if (!origin || config.corsOrigins.includes(origin)) return callback(null, true);
       try {

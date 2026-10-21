@@ -120,12 +120,24 @@ export function attachWebSockets(server, {
           socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
           return socket.destroy();
         }
+        const sessionOffsetSeconds = Number(url.searchParams.get('session_offset_seconds') || 0);
+        if (!Number.isFinite(sessionOffsetSeconds) || sessionOffsetSeconds < 0 || sessionOffsetSeconds > 86_400) {
+          socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+          return socket.destroy();
+        }
+        const captureSequence = Number(url.searchParams.get('capture_sequence') || 0);
+        if (!Number.isInteger(captureSequence) || captureSequence < 0 || captureSequence > 10_000_000) {
+          socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+          return socket.destroy();
+        }
 
         wss.handleUpgrade(request, socket, head, (client) => {
           void attachDeviceAudioSocket(client, {
             device,
             conversation,
             sampleRate,
+            sessionOffsetSeconds,
+            captureSequence,
             deepgramApiKey,
             deeplApiKey,
             deeplApiUrl,

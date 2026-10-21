@@ -17,6 +17,8 @@ const MIN_PREVIEW_BYTES = 4500;
 const RECORDER_TIMESLICE_MS = 100;
 const MAX_PARALLEL_UPLOADS = 3;
 const STOP_UPLOAD_WAIT_MS = 0;
+const MAX_PENDING_LIVE_AUDIO_BYTES = 2 * 1024 * 1024;
+const MAX_LIVE_SOCKET_BUFFERED_BYTES = 512 * 1024;
 const PREFERRED_MIC_KEY = 'storelisten.preferredMic';
 const MANUAL_STOP_KEY = 'storelisten.manualStop';
 
@@ -1078,11 +1080,19 @@ function attachLiveAudioEvents(capture, socket) {
     if (state.capture !== capture) return;
     let event;
     try { event = JSON.parse(String(message.data)); } catch { return; }
+    if (event.event === 'audio.ready') {
+      capture.audioSocketRetryDelay = 1000;
+      showError($('#captureError'), '');
+      flushPendingLiveAudio(capture, socket);
+      return;
+    }
     if (event.event === 'transcript.partial') {
+      capture.captureSequence = Math.max(capture.captureSequence || 0, Number(event.captureSequence) || 0);
       showLivePartial(event);
       return;
     }
     if (event.event === 'transcript.final') {
+      capture.captureSequence = Math.max(capture.captureSequence || 0, Number(event.captureSequence) || 0);
       clearLivePartial();
       addTranscript({
         ...event,
@@ -1094,18 +1104,122 @@ function attachLiveAudioEvents(capture, socket) {
       });
       return;
     }
-    if (event.event === 'audio.error') showError($('#captureError'), event.detail || 'Live transcription is unavailable.');
+    if (event.event === 'audio.error') {
+      showError($('#captureError'), event.detail || 'Live transcription is unavailable.');
+      if (capture.requested && socket.readyState === WebSocket.OPEN) socket.close(1011, 'Transcription stream error');
+    }
   });
   socket.addEventListener('close', (event) => {
+    if (capture.audioSocket === socket) capture.audioSocket = null;
     if (state.capture === capture && capture.requested && event.code !== 1000) {
-      showError($('#captureError'), event.reason || 'Live transcription connection closed.');
+      scheduleLiveAudioReconnect(capture, event.reason || 'Live transcription connection interrupted.');
     }
   });
 }
 
+function scheduleLiveAudioFlush(capture, socket) {
+  if (capture.audioFlushTimer || !capture.pendingAudioFrames.length) return;
+  capture.audioFlushTimer = window.setTimeout(() => {
+    capture.audioFlushTimer = null;
+    flushPendingLiveAudio(capture, socket);
+  }, 120);
+}
+
+function flushPendingLiveAudio(capture, socket) {
+  if (capture.audioSocket !== socket || socket.readyState !== WebSocket.OPEN) return;
+  while (capture.pendingAudioFrames.length && socket.bufferedAmount <= MAX_LIVE_SOCKET_BUFFERED_BYTES) {
+    const frame = capture.pendingAudioFrames.shift();
+    capture.pendingAudioBytes -= frame.audio.byteLength;
+    socket.send(frame.audio);
+  }
+  if (capture.pendingAudioFrames.length) scheduleLiveAudioFlush(capture, socket);
+}
+
+function sendLiveAudioFrame(capture, audio) {
+  const socket = capture.audioSocket;
+  if (socket?.readyState === WebSocket.OPEN
+    && !capture.pendingAudioFrames.length
+    && socket.bufferedAmount <= MAX_LIVE_SOCKET_BUFFERED_BYTES) {
+    socket.send(audio);
+    return;
+  }
+
+  capture.pendingAudioFrames.push({
+    audio,
+    offset: Math.max(0, (Date.now() - capture.startedAt) / 1000),
+  });
+  capture.pendingAudioBytes += audio.byteLength;
+  while (capture.pendingAudioBytes > MAX_PENDING_LIVE_AUDIO_BYTES && capture.pendingAudioFrames.length) {
+    const dropped = capture.pendingAudioFrames.shift();
+    capture.pendingAudioBytes -= dropped.audio.byteLength;
+    capture.audioBufferOverflow = true;
+  }
+  if (socket?.readyState === WebSocket.OPEN) flushPendingLiveAudio(capture, socket);
+}
+
+function scheduleLiveAudioReconnect(capture, message) {
+  if (state.capture !== capture || !capture.requested || capture.audioSocketRetryTimer) return;
+  setApiStatus(false);
+  showError($('#captureError'), `${message} Reconnecting; buffering a short audio gap.`);
+  const delay = capture.audioSocketRetryDelay || 1000;
+  capture.audioSocketRetryDelay = Math.min(delay * 2, 30_000);
+  capture.audioSocketRetryTimer = window.setTimeout(() => {
+    capture.audioSocketRetryTimer = null;
+    void (async () => {
+      try {
+        const firstQueuedOffset = capture.pendingAudioFrames[0]?.offset;
+        const sessionOffsetSeconds = Number.isFinite(firstQueuedOffset)
+          ? firstQueuedOffset
+          : Math.max(0, (Date.now() - capture.startedAt) / 1000);
+        const socket = await liveAudio.createAudioSocket({
+          apiBase: state.config.apiBase,
+          deviceId: state.config.deviceId,
+          deviceSecret: state.config.deviceSecret,
+          conversationId: capture.conversationId,
+          sampleRate: capture.audioContext.sampleRate,
+          sessionOffsetSeconds,
+          captureSequence: capture.captureSequence || 0,
+        });
+        if (state.capture !== capture || !capture.requested) {
+          socket.close();
+          return;
+        }
+        capture.audioSocket = socket;
+        attachLiveAudioEvents(capture, socket);
+        flushPendingLiveAudio(capture, socket);
+      } catch (error) {
+        scheduleLiveAudioReconnect(
+          capture,
+          error instanceof Error ? error.message : 'Live transcription connection failed.',
+        );
+      }
+    })();
+  }, Math.round(delay * (0.8 + Math.random() * 0.4)));
+}
+
 async function finishLiveAudioSocket(capture) {
   const socket = capture.audioSocket;
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  if (capture.audioSocketRetryTimer) {
+    window.clearTimeout(capture.audioSocketRetryTimer);
+    capture.audioSocketRetryTimer = null;
+  }
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    if (capture.pendingAudioFrames.length) {
+      showError($('#captureError'), 'The live connection dropped before the final audio could be sent. The saved microphone clips may still be available.');
+    }
+    return;
+  }
+  flushPendingLiveAudio(capture, socket);
+  const drainDeadline = Date.now() + 5000;
+  while (capture.pendingAudioFrames.length && Date.now() < drainDeadline && socket.readyState === WebSocket.OPEN) {
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+    flushPendingLiveAudio(capture, socket);
+  }
+  if (capture.pendingAudioFrames.length || capture.audioBufferOverflow) {
+    showError($('#captureError'), 'Network delay prevented all buffered audio from reaching live transcription. Check the transcript before closing.');
+  }
+  window.clearTimeout(capture.audioFlushTimer);
+  capture.audioFlushTimer = null;
   await new Promise((resolve) => {
     const timeout = window.setTimeout(() => {
       socket.close();
@@ -1327,6 +1441,8 @@ async function stopCapture({ reason = 'manual' } = {}) {
   }
   capture.requested = false;
   capture.speaking = false;
+  window.clearTimeout(capture.audioSocketRetryTimer);
+  capture.audioSocketRetryTimer = null;
   clearLivePartial();
   setCaptureUi(false, true);
   clearTimeout(capture.segmentTimer);
@@ -1489,6 +1605,13 @@ async function startCaptureSession() {
       activeUploads: 0,
       sequence: 0,
       offset: 0,
+      pendingAudioFrames: [],
+      pendingAudioBytes: 0,
+      audioSocketRetryDelay: 1000,
+      audioSocketRetryTimer: null,
+      audioFlushTimer: null,
+      audioBufferOverflow: false,
+      captureSequence: 0,
       startedAt: Date.now(),
       segmentStartedAt: 0,
       stopPromise: null,
@@ -1500,6 +1623,7 @@ async function startCaptureSession() {
       deviceSecret: state.config.deviceSecret,
       conversationId: session.conversation_id,
       sampleRate: audioContext.sampleRate,
+      sessionOffsetSeconds: Math.max(0, (Date.now() - transcriptSession.startedAt.getTime()) / 1000),
     });
     attachLiveAudioEvents(capture, capture.audioSocket);
     await audioContext.audioWorklet.addModule(new URL('pcm-capture-processor.js', document.baseURI).href);
@@ -1510,15 +1634,7 @@ async function startCaptureSession() {
     });
     capture.pcmNode = pcmNode;
     pcmNode.port.onmessage = ({ data }) => {
-      if (capture.audioSocket?.readyState !== WebSocket.OPEN) return;
-      if (capture.audioSocket.bufferedAmount > 512 * 1024) {
-        if (!capture.audioBackpressureWarning) {
-          capture.audioBackpressureWarning = true;
-          showError($('#captureError'), 'Network is behind live audio. Transcript delivery may be delayed.');
-        }
-        return;
-      }
-      capture.audioSocket.send(data);
+      sendLiveAudioFrame(capture, data);
     };
     source.connect(pcmNode);
     pcmNode.connect(silent);

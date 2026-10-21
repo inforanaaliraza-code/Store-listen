@@ -6,7 +6,7 @@ import { apiGet, getToken, openStoreSocket, type DashboardSummary, WS_URL } from
 import { englishTranscriptText, ENGLISH_TRANSLATION_PENDING } from '../../../lib/english-transcript';
 
 type Recommendation = { id: string; title: string; message: string; confidence: number; store_id: string };
-type LiveLine = { id: string; storeId: string; speaker: string; text: string; translation?: string; at: string };
+type LiveLine = { id: string; storeId: string; conversationId: string; speaker: string; text: string; translation?: string; at: number };
 
 function revenueLabel(values: Record<string, number> | undefined) {
   const entries = Object.entries(values ?? {});
@@ -15,6 +15,30 @@ function revenueLabel(values: Record<string, number> | undefined) {
     try { return new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount); }
     catch { return `${currency} ${amount.toFixed(0)}`; }
   }).join(' · ');
+}
+
+function dashboardParagraphs(lines: LiveLine[]) {
+  const grouped = new Map<string, LiveLine[]>();
+  for (const line of lines) {
+    const key = `${line.storeId}:${line.conversationId}`;
+    grouped.set(key, [...(grouped.get(key) || []), line]);
+  }
+  return [...grouped.entries()].flatMap(([key, conversationLines]) => {
+    const paragraphs: { startedAt: number; endedAt: number; lines: LiveLine[] }[] = [];
+    conversationLines.sort((left, right) => left.at - right.at).forEach((line) => {
+      let paragraph = paragraphs.at(-1);
+      if (!paragraph || line.at - paragraph.endedAt > 12_000) {
+        paragraph = { startedAt: line.at, endedAt: line.at, lines: [] };
+        paragraphs.push(paragraph);
+      }
+      paragraph.lines.push(line);
+      paragraph.endedAt = line.at;
+    });
+    return paragraphs.map((paragraph, index) => ({
+      key: `${key}:${paragraph.startedAt}:${index}`,
+      lines: paragraph.lines,
+    }));
+  });
 }
 
 export default function DashboardPage() {
@@ -72,6 +96,40 @@ export default function DashboardPage() {
     const finalCaptureSequences = new Map<string, number>();
     const previewSequences = new Map<string, number>();
     const visibleStoreIds = storeIds.split('|');
+    const restoreLiveTranscript = async (storeId: string) => {
+      const params = new URLSearchParams({ store_id: storeId, status: 'LIVE', page_size: '1' });
+      const response = await apiGet<{ conversations: { items: { id: string; started_at: string }[] } }>(
+        `/api/v1/conversations?${params}`,
+      );
+      const conversation = response.conversations.items[0];
+      if (!conversation || disposed) return;
+      const transcript = await apiGet<{ segments: {
+        id: string;
+        speaker_label: string;
+        language: string;
+        original_text: string;
+        translated_text: string | null;
+        english_text?: string;
+        start_time: number;
+      }[] }>(`/api/v1/conversations/${encodeURIComponent(conversation.id)}/transcript?page_size=500`);
+      if (disposed) return;
+      const conversationStart = Date.parse(conversation.started_at);
+      const recovered = transcript.segments.map((segment) => ({
+        id: segment.id,
+        storeId,
+        conversationId: conversation.id,
+        speaker: segment.speaker_label || 'Speaker',
+        text: englishTranscriptText(segment.original_text, segment.english_text, segment.language),
+        at: (Number.isFinite(conversationStart) ? conversationStart : Date.now())
+          + Math.max(0, Number(segment.start_time) || 0) * 1000,
+      }));
+      setLiveLines((current) => {
+        const merged = new Map(recovered.map((line) => [line.id, line]));
+        current.forEach((line) => merged.set(line.id, line));
+        return [...merged.values()].sort((left, right) => right.at - left.at).slice(0, 12);
+      });
+      if (recovered.length) setLiveStatus('Restored live transcript from the store recorder');
+    };
     const scheduleRefresh = () => {
       window.clearTimeout(refreshTimer);
       refreshTimer = window.setTimeout(() => void load(true), 250);
@@ -89,7 +147,14 @@ export default function DashboardPage() {
       const pingTimer = window.setInterval(() => {
         if (socket.readyState === WebSocket.OPEN) socket.send('ping');
       }, 15_000);
-      socket.onopen = () => { retryDelay = 1000; };
+      socket.onopen = () => {
+        if (disposed) {
+          socket.close();
+          return;
+        }
+        retryDelay = 1000;
+        void restoreLiveTranscript(storeId).catch(() => undefined);
+      };
       socket.onmessage = (message) => {
         if (typeof message.data === 'string' && (message.data === 'pong' || message.data === 'ping')) return;
         scheduleRefresh();
@@ -106,6 +171,7 @@ export default function DashboardPage() {
             conversationId?: string;
             captureSequence?: number;
             previewSequence?: number;
+            sessionOffsetSeconds?: number;
             timestamp?: string;
             label?: string;
           };
@@ -136,9 +202,10 @@ export default function DashboardPage() {
             const line: LiveLine = {
               id: event.segmentId || `${event.timestamp}-${Math.random()}`,
               storeId: event.storeId || storeId,
+              conversationId: event.conversationId || '',
               speaker: event.speakerLabel || 'Speaker',
               text: english,
-              at: event.timestamp || new Date().toISOString(),
+              at: Date.parse(event.timestamp || '') || Date.now(),
             };
             setLiveLines((items) => [line, ...items.filter((item) => item.id !== line.id)].slice(0, 12));
             setLiveStatus('Live transcript from the store recorder');
@@ -166,7 +233,9 @@ export default function DashboardPage() {
       disposed = true;
       window.clearTimeout(refreshTimer);
       reconnectTimers.forEach((timer) => window.clearTimeout(timer));
-      sockets.forEach((socket) => socket.close());
+      sockets.forEach((socket) => {
+        if (socket.readyState !== WebSocket.CONNECTING) socket.close();
+      });
     };
   }, [load, storeIds]);
 
@@ -193,6 +262,7 @@ export default function DashboardPage() {
   const trendDates = m.conversation_trend_dates || trend.map((_, index) => `D-${trend.length - index}`);
   const missedCategories = Object.entries(m.missed_by_category || {});
   const latestRecommendation = recommendations[0];
+  const liveParagraphs = dashboardParagraphs(liveLines);
 
   return (
     <div className="owner-dashboard">
@@ -250,10 +320,13 @@ export default function DashboardPage() {
           <Link href="/live">Open live monitor</Link>
         </div>
         <div className="owner-live-lines">
-          {liveLines.map((line) => (
-            <article className="owner-live-line" key={line.id}>
-              <span>{data.stores.find((store) => store.id === line.storeId)?.name || line.storeId} · {line.speaker}</span>
-              <p>{line.text}</p>
+          {liveParagraphs.map((paragraph) => (
+            <article className="owner-live-line" key={paragraph.key}>
+              <span>
+                {data.stores.find((store) => store.id === paragraph.lines[0].storeId)?.name || paragraph.lines[0].storeId}
+                {' · '}{paragraph.lines[0].speaker}
+              </span>
+              <p>{paragraph.lines.map((line) => line.text).join(' ')}</p>
             </article>
           ))}
           {!liveLines.length ? (

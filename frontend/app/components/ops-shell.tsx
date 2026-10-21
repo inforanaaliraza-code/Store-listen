@@ -3,7 +3,7 @@
 import Link from '@/lib/router-link';
 import { usePathname, useRouter } from '@/lib/router-hooks';
 import { ReactNode, useEffect, useState } from 'react';
-import { apiGet, clearToken, getToken, type Store } from '../../lib/api';
+import { apiGet, ApiError, clearToken, getToken, type Store } from '../../lib/api';
 import { BrandLogo } from './brand-logo';
 import { ConfirmDialogProvider } from './confirm-dialog';
 
@@ -26,6 +26,22 @@ const nav = [
   { href: '/settings', label: 'Settings' },
 ];
 
+function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const finish = () => {
+      window.clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = window.setTimeout(finish, delayMs);
+    signal.addEventListener('abort', finish, { once: true });
+  });
+}
+
 export function OpsShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -47,38 +63,57 @@ export function OpsShell({ children }: { children: ReactNode }) {
     if (!ready) return;
     const controller = new AbortController();
     void (async () => {
-      try {
-        const readiness = await apiGet<{
-          status: string;
-          mode: string;
-          database: string;
-          capabilities?: { transcription?: string };
-        }>('/ready', { signal: controller.signal });
-        if (readiness.status !== 'ready' || readiness.database !== 'connected' || !readiness.capabilities) {
-          throw new Error('The API is not ready or needs a production update.');
-        }
-        if (readiness.mode !== 'live') {
-          setServiceState('demo');
-          setServiceMessage('Live operations are disabled because this API is in demo mode. Configure the production service before continuing.');
+      let attempt = 0;
+      while (!controller.signal.aborted) {
+        try {
+          const readiness = await apiGet<{
+            status: string;
+            mode: string;
+            database: string;
+            capabilities?: { transcription?: string };
+          }>('/ready', { signal: controller.signal });
+          if (readiness.status !== 'ready' || readiness.database !== 'connected' || !readiness.capabilities) {
+            setServiceState('unavailable');
+            setServiceMessage('The API is not ready or needs a production update. Retry after the service is corrected.');
+            return;
+          }
+          if (readiness.mode !== 'live') {
+            setServiceState('demo');
+            setServiceMessage('Live operations are disabled because this API is in demo mode. Configure the production service before continuing.');
+            return;
+          }
+          if (readiness.capabilities.transcription !== 'available') {
+            setServiceState('unavailable');
+            setServiceMessage('Live transcription is not configured on the API. An administrator must configure the speech provider before store monitoring can be used.');
+            return;
+          }
+          const [user, storeResult] = await Promise.all([
+            apiGet<{ email: string; full_name: string }>('/api/v1/auth/me', { signal: controller.signal }),
+            apiGet<{ stores: { items: Store[]; total: number } }>('/api/v1/stores?page_size=1', { signal: controller.signal }),
+          ]);
+          if (controller.signal.aborted) return;
+          setWorkspaceLabel(`${user.full_name || user.email} · ${storeResult.stores.total} ${storeResult.stores.total === 1 ? 'store' : 'stores'}`);
+          setServiceState('live');
+          setServiceMessage('Connected to the live production API.');
           return;
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          const transient = !(error instanceof ApiError)
+            || error.status === 0
+            || error.status >= 500
+            || error.code === 'NETWORK_ERROR'
+            || error.code === 'TIMEOUT';
+          if (!transient) {
+            setServiceState('unavailable');
+            setServiceMessage(error instanceof Error ? error.message : 'Unable to verify production services.');
+            return;
+          }
+          attempt += 1;
+          const delay = Math.min(1000 * (2 ** Math.min(attempt - 1, 5)), 30_000);
+          setServiceState('checking');
+          setServiceMessage(`The API is temporarily unavailable. Retrying automatically in ${Math.round(delay / 1000)} seconds…`);
+          await waitForRetry(delay, controller.signal);
         }
-        if (readiness.capabilities.transcription !== 'available') {
-          setServiceState('unavailable');
-          setServiceMessage('Live transcription is not configured on the API. An administrator must configure the speech provider before store monitoring can be used.');
-          return;
-        }
-        const [user, storeResult] = await Promise.all([
-          apiGet<{ email: string; full_name: string }>('/api/v1/auth/me', { signal: controller.signal }),
-          apiGet<{ stores: { items: Store[]; total: number } }>('/api/v1/stores?page_size=1', { signal: controller.signal }),
-        ]);
-        if (controller.signal.aborted) return;
-        setWorkspaceLabel(`${user.full_name || user.email} · ${storeResult.stores.total} ${storeResult.stores.total === 1 ? 'store' : 'stores'}`);
-        setServiceState('live');
-        setServiceMessage('Connected to the live production API.');
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setServiceState('unavailable');
-        setServiceMessage(error instanceof Error ? error.message : 'Unable to verify production services.');
       }
     })();
     return () => controller.abort();
@@ -103,7 +138,7 @@ export function OpsShell({ children }: { children: ReactNode }) {
               <h1 className="serif">{serviceState === 'checking' ? 'Connecting to Store Listen' : 'Live workspace unavailable'}</h1>
               <p>{serviceMessage}</p>
               <p>Demo or outdated API responses are blocked here so sample records cannot be mistaken for live store activity.</p>
-              {serviceState !== 'checking' ? <button className="ghost" onClick={() => { setServiceState('checking'); setServiceMessage('Retrying production connection…'); setConnectionAttempt((attempt) => attempt + 1); }}>Retry connection</button> : null}
+              {serviceState !== 'demo' ? <button className="ghost" onClick={() => { setServiceState('checking'); setServiceMessage('Retrying production connection…'); setConnectionAttempt((attempt) => attempt + 1); }}>Retry connection</button> : null}
             </section>
           </main>
         </div>

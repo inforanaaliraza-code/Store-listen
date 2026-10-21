@@ -290,6 +290,7 @@ test('readiness reports database, deployment mode, and transcription capability'
     database: 'connected',
     capabilities: { transcription: 'available' },
   });
+
   const configuredKey = testConfig.deepgramApiKey;
   try {
     delete testConfig.deepgramApiKey;
@@ -299,6 +300,32 @@ test('readiness reports database, deployment mode, and transcription capability'
   } finally {
     testConfig.deepgramApiKey = configuredKey;
   }
+});
+
+test('CORS preflight allows the configured web origin and rejects unconfigured origins', async () => {
+  const allowed = await fetch(`${baseUrl}/api/v1/devices/pending`, {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'http://localhost:3000',
+      'Access-Control-Request-Method': 'GET',
+      'Access-Control-Request-Headers': 'authorization,content-type',
+    },
+  });
+  assert.equal(allowed.status, 204);
+  assert.equal(allowed.headers.get('access-control-allow-origin'), 'http://localhost:3000');
+  assert.match(allowed.headers.get('access-control-allow-methods') || '', /GET/);
+  assert.match(allowed.headers.get('access-control-allow-headers') || '', /authorization/i);
+  assert.equal(allowed.headers.get('access-control-max-age'), '600');
+
+  const rejected = await fetch(`${baseUrl}/api/v1/devices/pending`, {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'https://untrusted.example',
+      'Access-Control-Request-Method': 'GET',
+      'Access-Control-Request-Headers': 'authorization',
+    },
+  });
+  assert.equal(rejected.headers.get('access-control-allow-origin'), null);
 });
 
 test('login preserves the React client token response and audit log', async () => {
