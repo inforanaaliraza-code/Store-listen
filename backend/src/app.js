@@ -11,7 +11,11 @@ import { addCleanupCounts, deleteConversationAudio, deleteOrphanRecordings, empt
 import { transcribeWithDeepgram } from './deepgram-transcribe.js';
 import { isSpanishTranscript, translateToEnglish } from './translation.js';
 import { analyzeConversation } from './rule-analysis.js';
-import { generateGroqCoaching, generateGroqDailySummary } from './groq-ai.js';
+import {
+  generateGroqCoaching,
+  generateGroqConversationReport,
+  generateGroqDailySummary,
+} from './groq-ai.js';
 
 export function createApp({
   config,
@@ -46,6 +50,7 @@ export function createApp({
   deepgramTranscriber = transcribeWithDeepgram,
   englishTranslator = translateToEnglish,
   groqCoaching = generateGroqCoaching,
+  groqConversationReport = generateGroqConversationReport,
   groqDailySummary = generateGroqDailySummary,
 }) {
   const audioStorage = suppliedAudioStorage || createLocalAudioStorage(config.audioStorageDir);
@@ -2266,10 +2271,13 @@ export function createApp({
         })),
         ai: {
           provider: 'rules',
+          conversation_report_provider: config.groqApiKey ? 'groq' : 'unavailable',
+          live_coaching_provider: config.groqApiKey ? 'groq' : 'unavailable',
+          daily_report_provider: config.groqApiKey ? 'groq' : 'unavailable',
           speech_provider: config.speechProvider,
           supports_original_transcript: true,
           supports_english_translation: Boolean(config.deeplApiKey || config.groqApiKey),
-          provider_note: 'Deepgram handles transcription; Spanish-to-English uses DeepL when configured and otherwise falls back to Groq.',
+          provider_note: 'Conversation reports, live coaching, and daily report summaries use Groq. Live opportunity signals remain deterministic local rules. Deepgram handles speech transcription; Spanish-to-English uses DeepL when configured and otherwise falls back to Groq.',
         },
         security: {
           authentication: 'jwt+httpOnly-cookie',
@@ -2427,6 +2435,19 @@ export function createApp({
         SalesRecommendationModel?.find({ conversation_id: item.id }).lean() || [],
         AiProcessingRunModel?.find({ conversation_id: item.id }).lean() || [],
       ]);
+      let conversationReport = null;
+      for (const run of [...runs].sort((left, right) => new Date(right.created_at || 0) - new Date(left.created_at || 0))) {
+        if (run.provider !== 'groq'
+          || !String(run.input_excerpt || '').startsWith('[conversation-report]')
+          || run.status !== 'completed') continue;
+        try {
+          const output = JSON.parse(run.output_json || '{}');
+          if (output.kind === 'conversation_report' && output.report && typeof output.report === 'object') {
+            conversationReport = output.report;
+            break;
+          }
+        } catch { continue; }
+      }
       const analyzed = opportunities.length || recommendations.length || runs.some((run) => run.status === 'completed');
       return response.json({
         ...serialized,
@@ -2443,7 +2464,7 @@ export function createApp({
           manager_note: row.manager_note || null,
         })),
         recommendations: recommendations.map((row) => ({ id: row.id, title: row.title, message: row.message, confidence: row.confidence })),
-        conversation_report: null,
+        conversation_report: conversationReport,
       });
     } catch (error) { return next(error); }
   });
@@ -2570,11 +2591,18 @@ export function createApp({
         role: segment.speaker_id === 'speaker-customer' ? 'customer' : segment.speaker_id?.startsWith('speaker-employee-') ? 'employee' : 'unknown',
         language: segment.language || 'und',
         time_seconds: Number(segment.start_time) || 0,
-        text: englishTranscriptText(segment),
+        text: englishTranscriptText(segment) || String(segment.original_text || '').trim(),
       })).filter((segment) => segment.text);
-      if (!transcript.length) return response.status(409).json({ detail: 'No English transcript is ready for report generation yet.' });
-      const report = analyzeConversation(transcript).report;
-      const provider = 'rules';
+      if (!transcript.length) return response.status(409).json({ detail: 'No readable transcript is ready for report generation yet.' });
+      if (!config.groqApiKey) return response.status(503).json({ detail: 'AI conversation reports are not configured. Set GROQ_API_KEY on the backend service.' });
+      const recordedOutcomes = await OpportunityModel?.find({ conversation_id: conversation.id }).lean() || [];
+      const report = await groqConversationReport({
+        apiKey: config.groqApiKey,
+        model: config.groqModel,
+        transcript,
+        recordedOutcomes,
+      });
+      const provider = 'groq';
       const reportId = `report-${conversation.id}`;
       const prior = await AiProcessingRunModel.findOne({ id: reportId });
       Object.assign(prior || {}, {
@@ -2604,7 +2632,7 @@ export function createApp({
         transcript_generated: false,
         transcript_segments: segments.length,
         provider,
-        caveat: 'Rule-based transcript signals are limited estimates for human review. Unknown speaker attribution is not inferred.',
+        caveat: 'Groq AI generated this transcript-grounded report. Findings are estimates for human review, not proof of a sale outcome or employee performance.',
       });
     } catch (error) { return next(error); }
   });

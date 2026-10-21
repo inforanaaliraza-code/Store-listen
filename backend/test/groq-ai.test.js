@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { generateGroqCoaching, generateGroqDailySummary } from '../src/groq-ai.js';
+import {
+  generateGroqCoaching,
+  generateGroqConversationReport,
+  generateGroqDailySummary,
+} from '../src/groq-ai.js';
 
 function jsonResponse(content, status = 200) {
   return {
@@ -57,6 +61,63 @@ test('Groq daily summary requires complete, valid report fields', async () => {
   assert.equal(result.provider, 'groq');
   assert.equal(result.key_points[0], 'A customer asked about a charger.');
   assert.equal(result.actions_for_tomorrow.length, 1);
+});
+
+test('Groq conversation report analyzes Spanish evidence and validates report fields', async () => {
+  let requestBody;
+  const report = await generateGroqConversationReport({
+    apiKey: 'test-key',
+    model: 'test-model',
+    transcript: [
+      { role: 'customer', language: 'es', time_seconds: 4, text: '¿Tiene un cargador para mi teléfono?' },
+      { role: 'employee', language: 'en', time_seconds: 8, text: 'I can check which connector you need.' },
+    ],
+    recordedOutcomes: [{ status: 'REVIEW_REQUIRED', customer_intent: 'Possible purchase' }],
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return jsonResponse({
+        summary: 'A customer asks about a phone charger; no purchase outcome is stated.',
+        customer_needs: ['Phone charger'],
+        customer_sentiment: 'unknown',
+        products_discussed: ['Phone charger'],
+        opportunity_type: 'potential',
+        opportunity_summary: 'The need is expressed, but the outcome is not in the transcript.',
+        recommendation: 'Confirm the customer’s connector and check verified stock.',
+        evidence: 'At 4 seconds the customer asks for a charger; at 8 seconds the employee offers to check.',
+        confidence: 0.86,
+      });
+    },
+  });
+
+  assert.equal(requestBody.model, 'test-model');
+  assert.equal(requestBody.response_format.type, 'json_object');
+  assert.match(requestBody.messages[1].content, /¿Tiene un cargador para mi teléfono/);
+  assert.equal(report.customer_sentiment, 'unknown');
+  assert.equal(report.opportunity_type, 'potential');
+  assert.equal(report.provider, 'groq');
+  assert.equal(report.confidence, 0.86);
+});
+
+test('Groq conversation report rejects incomplete output rather than saving rule-based fallback', async () => {
+  await assert.rejects(
+    generateGroqConversationReport({
+      apiKey: 'test-key',
+      model: 'test-model',
+      transcript: [{ role: 'customer', language: 'en', time_seconds: 0, text: 'Hello.' }],
+      fetchImpl: async () => jsonResponse({
+        summary: 'A customer said hello.',
+        customer_needs: [],
+        customer_sentiment: 'unknown',
+        products_discussed: [],
+        opportunity_type: 'none',
+        opportunity_summary: 'No purchase request is apparent.',
+        recommendation: '',
+        evidence: 'At 0 seconds, the speaker says hello.',
+        confidence: 0.4,
+      }),
+    }),
+    /incomplete conversation report; no report was saved/,
+  );
 });
 
 test('Groq fails clearly without a key, on network errors, and for malformed output', async () => {

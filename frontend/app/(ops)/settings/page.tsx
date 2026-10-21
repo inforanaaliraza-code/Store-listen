@@ -28,7 +28,16 @@ type SettingsData = {
   integrations: { kind: string; provider: string; status: string; notes: string | null }[];
   users: { id: string; email: string; full_name: string; role: string; store_id: string | null }[];
   roles: string[];
-  ai: { provider: string; speech_provider: string; supports_original_transcript: boolean; supports_english_translation: boolean; provider_note: string };
+  ai: {
+    provider: string;
+    conversation_report_provider: string;
+    live_coaching_provider: string;
+    daily_report_provider: string;
+    speech_provider: string;
+    supports_original_transcript: boolean;
+    supports_english_translation: boolean;
+    provider_note: string;
+  };
   security: Record<string, string | boolean>;
 };
 
@@ -41,7 +50,7 @@ function Status({ value }: { value: string }) {
 
 function providerStatus(provider: string) {
   if (provider === 'mock') return 'demo disabled';
-  if (provider === 'none') return 'not connected';
+  if (provider === 'none' || provider === 'unavailable') return 'not connected';
   if (provider === 'rules') return 'active';
   return 'configured';
 }
@@ -162,7 +171,7 @@ export default function SettingsPage() {
 
       {data && active === 'ai' ? <section className="settings-overview-grid">
         <article className="settings-panel"><div className="settings-panel-head"><div><span className="eyebrow">VOICE PIPELINE</span><h2>Speech recognition</h2></div><Status value="active" /></div><dl className="settings-detail-list"><div><dt>Provider</dt><dd>{data.ai.speech_provider}</dd></div><div><dt>Allowed languages</dt><dd>English, Spanish, Hindi, and Urdu</dd></div><div><dt>Original transcript</dt><dd>{data.ai.supports_original_transcript ? 'Available' : 'Unavailable'}</dd></div><div><dt>English translation</dt><dd>{data.ai.supports_english_translation ? 'Available for Spanish speech' : 'Unavailable'}</dd></div></dl></article>
-        <article className="settings-panel"><div className="settings-panel-head"><div><span className="eyebrow">CONVERSATION INTELLIGENCE</span><h2>Analysis provider</h2></div><Status value={providerStatus(data.ai.provider)} /></div><dl className="settings-detail-list"><div><dt>Selected provider</dt><dd>{data.ai.provider}</dd></div></dl><p className="settings-note">{data.ai.provider_note}</p><p className="settings-caveat">Recommendations are review prompts, not verified facts or employee performance scores.</p></article>
+        <article className="settings-panel"><div className="settings-panel-head"><div><span className="eyebrow">CONVERSATION INTELLIGENCE</span><h2>Analysis providers</h2></div><Status value={data.ai.conversation_report_provider} /></div><dl className="settings-detail-list"><div><dt>Conversation AI reports</dt><dd>{data.ai.conversation_report_provider}</dd></div><div><dt>Live employee coaching</dt><dd>{data.ai.live_coaching_provider}</dd></div><div><dt>Daily report summaries</dt><dd>{data.ai.daily_report_provider}</dd></div><div><dt>Opportunity signals</dt><dd>{data.ai.provider}</dd></div></dl><p className="settings-note">{data.ai.provider_note}</p><p className="settings-caveat">AI reports and recommendations are evidence-based review aids, not proof of sales outcomes or employee performance.</p></article>
       </section> : null}
 
       {data && active === 'security' ? <section className="settings-overview-grid">

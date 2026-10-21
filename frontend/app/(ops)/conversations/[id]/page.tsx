@@ -20,6 +20,7 @@ type ConversationReport = {
   recommendation: string;
   evidence: string;
   confidence: number;
+  provider: string;
 };
 type ConversationDetail = Conversation & {
   analysis_status: 'analyzed' | 'unavailable' | 'pending';
@@ -237,7 +238,7 @@ export default function ConversationDetailPage() {
                 <section><span>OPPORTUNITY</span><strong className={`analysis-opportunity ${report.opportunity_type}`}>{report.opportunity_type === 'none' ? 'No clear opportunity' : `${report.opportunity_type} opportunity`}</strong><p>{report.opportunity_summary || 'No supporting opportunity identified.'}</p></section>
               </div>
               {report.evidence ? <p className="analysis-report-evidence"><strong>Evidence</strong> {report.evidence}</p> : null}
-              {report.recommendation ? <div className="analysis-recommendation"><strong>Recommended follow-up</strong><p>{report.recommendation}</p><small>{Math.round(report.confidence * 100)}% confidence · AI-generated estimate</small></div> : null}
+              {report.recommendation ? <div className="analysis-recommendation"><strong>Recommended follow-up</strong><p>{report.recommendation}</p><small>{Math.round(report.confidence * 100)}% confidence · {report.provider || 'AI'} analysis</small></div> : null}
             </div> : conversation.opportunities.length ? <div className="analysis-findings">
               {conversation.opportunities.map((opportunity) => <section className={`analysis-finding ${opportunity.status === 'MISSED' ? 'missed' : ''}`} key={opportunity.id}>
                 <strong>{opportunity.status === 'MISSED' ? 'Missed opportunity marked for review' : 'Potential sales opportunity'}</strong>
@@ -261,8 +262,8 @@ export default function ConversationDetailPage() {
             </button>
             {segments.length > 0 && segments.every((segment) => segment.speaker_id === 'speaker-unknown') ? <p className="analysis-caveat">Speaker attribution is unknown. The report summarizes transcript content without guessing who said each line.</p> : null}
             {!segments.length && recordingTotal > 0 ? <p className="analysis-caveat">No transcript is available yet. Generate the report to transcribe retained audio locally, then analyze it.</p> : null}
-            <p className="analysis-caveat">Conversation reports here use local transcript rules. Spanish-to-English translation uses DeepL when configured and may send text to Groq as a fallback. Live desktop coaching and daily report summaries also use Groq; follow your store’s privacy policy.</p>
-            <p className="analysis-caveat">AI findings are estimates for human review. Speaker labels are operator-selected, not voice identification.</p>
+            <p className="analysis-caveat">Conversation analysis reports use Groq AI and send transcript text to Groq; Spanish-to-English translation uses DeepL when configured and may use Groq as a fallback. Live desktop coaching and daily report summaries also use Groq. Follow your store’s privacy policy.</p>
+            <p className="analysis-caveat">Groq AI findings are estimates for human review. Speaker labels are operator-selected, not voice identification.</p>
           </article>
         </div>
 

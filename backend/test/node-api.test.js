@@ -281,6 +281,21 @@ before(async () => {
         provider: 'groq',
       };
     },
+    groqConversationReport: async ({ transcript }) => {
+      assert.ok(transcript.some((line) => line.text === 'Frase española sin traducción.'));
+      return {
+        summary: 'The customer asks about a phone charger; the sale outcome is not stated.',
+        customer_needs: ['Phone charger'],
+        customer_sentiment: 'unknown',
+        products_discussed: ['Phone charger'],
+        opportunity_type: 'potential',
+        opportunity_summary: 'A product need is expressed, but whether the customer purchased is not stated.',
+        recommendation: 'Ask which charger connector the customer needs and confirm availability.',
+        evidence: 'At 1 second, the customer says they need a charger. No purchase outcome is recorded.',
+        confidence: 0.78,
+        provider: 'groq',
+      };
+    },
     groqDailySummary: async () => ({
       headline: 'Charger interest and one verified POS sale',
       executive_summary: 'One conversation discussed a charger; one verified POS transaction was recorded.',
@@ -879,6 +894,10 @@ test('settings and POS reads expose scoped provider and transaction data', async
   const settings = await settingsResponse.json();
   assert.equal(settingsResponse.status, 200);
   assert.equal(settings.providers.speech, 'deepgram');
+  assert.equal(settings.ai.conversation_report_provider, 'groq');
+  assert.equal(settings.ai.live_coaching_provider, 'groq');
+  assert.equal(settings.ai.daily_report_provider, 'groq');
+  assert.equal(settings.ai.provider, 'rules');
   assert.equal(settings.security.secrets_exposed, false);
   assert.equal(settings.stores.some((store) => store.id === 'store-2'), false);
 
@@ -1014,9 +1033,16 @@ test('speaker attribution is scoped and coaching uses only English transcript te
   });
   assert.equal(report.status, 200);
   const reportBody = await report.json();
-  assert.equal(reportBody.provider, 'rules');
+  assert.equal(reportBody.provider, 'groq');
+  assert.equal(reportBody.report.provider, 'groq');
   assert.match(JSON.stringify(reportBody), /phone charger/);
-  assert.equal(JSON.stringify(reportBody).includes('Frase española sin traducción.'), false);
+  assert.match(reportBody.report.summary, /sale outcome is not stated/);
+  assert.equal(aiRuns.find((run) => run.id === `report-${conversationId}`).provider, 'groq');
+
+  const conversationDetail = await fetch(`${baseUrl}/api/v1/conversations/${conversationId}`, { headers });
+  const conversationBody = await conversationDetail.json();
+  assert.equal(conversationBody.conversation_report.provider, 'groq');
+  assert.equal(conversationBody.conversation_report.summary, reportBody.report.summary);
 
   const foreign = await fetch(`${baseUrl}/api/v1/conversations/foreign-conversation/transcript/${segmentId}/speaker`, {
     method: 'PATCH',
