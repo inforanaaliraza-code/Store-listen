@@ -542,9 +542,9 @@ function setCaptureUi(recording, busy = false, ended = false) {
   $('#captureMessage').textContent = awaitingApproval && !recording
     ? 'Recording stays off until an admin approves this store in the web portal.'
     : recording
-      ? 'Microphone is active. Conversation text appears in English.'
+      ? 'Microphone is active. English and Spanish speech appears here in English.'
       : busy ? 'Finishing uploads…' : ended ? 'Start again for the next conversation.' : 'Pick a mic and start.';
-  $('#captureButtonLabel').textContent = recording ? 'Stop' : busy ? 'Saving…' : 'Start';
+  $('#captureButtonLabel').textContent = recording ? 'Stop recording' : busy ? 'Saving…' : 'Start recording';
   $('#captureButton').classList.toggle('stopping', recording);
   $('#captureButton').disabled = busy || (awaitingApproval && !recording);
   $('#microphoneSelect').disabled = recording || busy;
@@ -1352,7 +1352,7 @@ async function startCaptureSession() {
     const liveTitle = document.createElement('strong');
     liveTitle.textContent = 'Listening — live transcript';
     const liveNote = document.createElement('span');
-    liveNote.textContent = 'Conversation transcript and staff suggestions appear in English.';
+    liveNote.textContent = 'English and Spanish speech is transcribed into English.';
     liveEmpty.append(liveTitle, liveNote);
     $('#transcriptList').replaceChildren(liveEmpty);
     $('#navTranscriptCount').textContent = String(state.sessions.length);
