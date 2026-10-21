@@ -19,6 +19,11 @@ if (productionDemoModeRequested) {
   console.warn('DEMO_MODE=true is ignored in production; live-only mode is enforced.');
 }
 
+const deepgramApiKey = String(process.env.DEEPGRAM_API_KEY || '').trim();
+if (/[^\x20-\x7e]/.test(deepgramApiKey)) {
+  throw new Error('DEEPGRAM_API_KEY contains invalid characters. Re-enter the key without line breaks.');
+}
+
 export const config = Object.freeze({
   appEnv,
   host: process.env.HOST || '127.0.0.1',
@@ -31,7 +36,7 @@ export const config = Object.freeze({
   posProvider: process.env.POS_PROVIDER || 'none',
   storageProvider: process.env.STORAGE_PROVIDER || 'local',
   jwtSecret: process.env.JWT_SECRET || 'local-development-only-change-before-deploy',
-  deepgramApiKey: process.env.DEEPGRAM_API_KEY || '',
+  deepgramApiKey,
   deeplApiKey: process.env.DEEPL_API_KEY || '',
   deeplApiUrl: (process.env.DEEPL_API_URL || 'https://api-free.deepl.com').replace(/\/+$/, ''),
   audioStorageDir: path.resolve(process.env.AUDIO_STORAGE_DIR || './storage/audio'),

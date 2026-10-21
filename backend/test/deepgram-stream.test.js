@@ -54,3 +54,24 @@ test('opens multilingual Nova-3 stream and forwards final/interim results', asyn
 test('fails closed when the server-side Deepgram key is absent', async () => {
   await assert.rejects(openDeepgramStream({ apiKey: '' }), /DEEPGRAM_API_KEY/);
 });
+
+test('trims a pasted line ending from the Deepgram key before creating the client', async () => {
+  let clientOptions;
+  class FakeDeepgramClient {
+    constructor(options) { clientOptions = options; }
+    listen = { v1: { connect: async () => { throw new Error('stop after client creation'); } } };
+  }
+
+  await assert.rejects(
+    openDeepgramStream({ apiKey: 'test-key\r\n', DeepgramClientType: FakeDeepgramClient }),
+    /stop after client creation/,
+  );
+  assert.deepEqual(clientOptions, { apiKey: 'test-key' });
+});
+
+test('rejects control characters in the Deepgram key before opening a socket', async () => {
+  await assert.rejects(
+    openDeepgramStream({ apiKey: 'test-\n-key' }),
+    /DEEPGRAM_API_KEY contains invalid characters/,
+  );
+});

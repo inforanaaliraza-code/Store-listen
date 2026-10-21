@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const backendDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const configurationModule = "import('./src/config.js').then(({ config }) => console.log(JSON.stringify({ demoMode: config.demoMode })))";
+const configurationModule = "import('./src/config.js').then(({ config }) => console.log(JSON.stringify({ demoMode: config.demoMode, deepgramApiKey: config.deepgramApiKey })))";
 const productionEnvironment = {
   ...process.env,
   APP_ENV: 'production',
@@ -45,4 +45,20 @@ test('production config fails closed without Deepgram or durable GridFS storage'
 
   const validProductionConfig = loadConfiguration(productionEnvironment);
   assert.equal(validProductionConfig.status, 0, validProductionConfig.stderr);
+});
+
+test('production config trims line endings from Deepgram keys and rejects embedded control characters', () => {
+  const trailingNewline = loadConfiguration({
+    ...productionEnvironment,
+    DEEPGRAM_API_KEY: 'test-deepgram-key\r\n',
+  });
+  assert.equal(trailingNewline.status, 0, trailingNewline.stderr);
+  assert.match(trailingNewline.stdout, /"deepgramApiKey":"test-deepgram-key"/);
+
+  const embeddedNewline = loadConfiguration({
+    ...productionEnvironment,
+    DEEPGRAM_API_KEY: 'test-deepgram\n-key',
+  });
+  assert.notEqual(embeddedNewline.status, 0);
+  assert.match(embeddedNewline.stderr, /DEEPGRAM_API_KEY contains invalid characters/);
 });

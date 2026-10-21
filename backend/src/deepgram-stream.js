@@ -7,9 +7,13 @@ export async function openDeepgramStream({
   onError = () => {},
   DeepgramClientType = DeepgramClient,
 }) {
-  if (!apiKey) throw new Error('DEEPGRAM_API_KEY is required for live transcription.');
+  const normalizedApiKey = String(apiKey || '').trim();
+  if (!normalizedApiKey) throw new Error('DEEPGRAM_API_KEY is required for live transcription.');
+  if (/[^\x20-\x7e]/.test(normalizedApiKey)) {
+    throw new Error('DEEPGRAM_API_KEY contains invalid characters. Re-enter the key without line breaks.');
+  }
 
-  const client = new DeepgramClientType({ apiKey });
+  const client = new DeepgramClientType({ apiKey: normalizedApiKey });
   const connection = await client.listen.v1.connect({
     model: 'nova-3',
     language: 'multi',
