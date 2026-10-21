@@ -47,3 +47,21 @@ test('optional short upload wait races the queue against a deadline', async () =
   await stopCaptureAndDrain(capture, null, { maxUploadWaitMs: 40 });
   assert.ok(Date.now() - started < 250, 'upload wait must not hang Stop');
 });
+
+test('releases the microphone before waiting for final recording uploads', async () => {
+  const events = [];
+  let finishUpload;
+  const capture = {
+    recorder: { state: 'inactive' },
+    stream: { getTracks: () => [{ stop: () => events.push('microphone released') }] },
+    audioContext: { state: 'closed' },
+    uploadQueue: new Promise((resolve) => { finishUpload = resolve; }),
+  };
+
+  const stopping = stopCaptureAndDrain(capture, null, { maxUploadWaitMs: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, ['microphone released']);
+  finishUpload();
+  await stopping;
+  assert.equal(capture.stream, null);
+});

@@ -44,4 +44,5 @@ test('GridFS audio adapter saves, reads, and deletes clips by validated object i
   assert.equal(files.has(key), false);
   await assert.rejects(storage.delete(key), { code: 'ENOENT' });
   await assert.rejects(storage.read('not-an-object-id'), /Invalid GridFS audio storage key/);
+  await assert.rejects(storage.delete('legacy-local-path.webm'), { code: 'ENOENT' });
 });

@@ -17,7 +17,7 @@
     if (capture.audioContext?.state !== 'closed') await capture.audioContext?.close();
     onInputReleased?.();
 
-    // Ultra-fast stop: never block the UI on remote STT finishing.
+    // Release the microphone first, then give final clips a bounded chance to persist before ending the server session.
     if (maxUploadWaitMs <= 0 || !capture.uploadQueue) return;
     await Promise.race([
       capture.uploadQueue.catch(() => undefined),

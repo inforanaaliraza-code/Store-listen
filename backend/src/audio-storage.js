@@ -68,7 +68,9 @@ export function createLocalAudioStorage(rootDirectory) {
 export function createGridFsAudioStorage(bucket, ObjectId) {
   function objectId(storageKey) {
     if (typeof storageKey !== 'string' || !/^[a-f\d]{24}$/i.test(storageKey)) {
-      throw new Error('Invalid GridFS audio storage key.');
+      const error = new Error('Invalid GridFS audio storage key; no GridFS file exists for this reference.');
+      error.code = 'ENOENT';
+      throw error;
     }
     return new ObjectId(storageKey);
   }

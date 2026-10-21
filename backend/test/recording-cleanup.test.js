@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cleanupExpiredRecordings, cleanupExpiredTranscripts } from '../src/recording-cleanup.js';
+import {
+  cleanupExpiredRecordings,
+  cleanupExpiredTranscripts,
+  deleteOrphanRecordings,
+} from '../src/recording-cleanup.js';
 
 function queryResult(rows) {
   return {
@@ -48,4 +52,31 @@ test('transcript retention deletes only segments older than the configured cutof
 
   assert.equal(count, 1);
   assert.equal(filter.created_at.$lte.toISOString(), '2026-09-21T00:00:00.000Z');
+});
+
+test('bulk cleanup removes metadata with absent or legacy GridFS audio references', async () => {
+  let deletedIds;
+  const models = {
+    AudioRecordingModel: {
+      deleteMany: async (filter) => {
+        deletedIds = filter.id.$in;
+        return { deletedCount: deletedIds.length };
+      },
+    },
+  };
+  const audioStorage = {
+    delete: async (key) => {
+      assert.equal(key, 'legacy-local-path.webm');
+      const error = new Error('GridFS audio file does not exist.');
+      error.code = 'ENOENT';
+      throw error;
+    },
+  };
+  const deleted = await deleteOrphanRecordings([
+    { id: 'audio-legacy', storage_key: 'legacy-local-path.webm' },
+    { id: 'audio-metadata-only' },
+  ], models, audioStorage);
+
+  assert.equal(deleted, 2);
+  assert.deepEqual(deletedIds, ['audio-legacy', 'audio-metadata-only']);
 });

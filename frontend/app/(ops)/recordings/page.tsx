@@ -119,6 +119,14 @@ export default function RecordingsPage() {
     return () => { active = false; };
   }, [conversationStatus, fromDate, page, reloadToken, storeId, stores.length, toDate]);
 
+  useEffect(() => {
+    if (!stores.length) return;
+    const refreshTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') reload();
+    }, 5000);
+    return () => window.clearInterval(refreshTimer);
+  }, [reload, stores.length]);
+
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
     if (!needle) return data?.recordings ?? [];

@@ -16,7 +16,7 @@ const LIVE_PREVIEW_ENABLED = voiceDetection.config?.livePreviewEnabled !== false
 const MIN_PREVIEW_BYTES = 4500;
 const RECORDER_TIMESLICE_MS = 100;
 const MAX_PARALLEL_UPLOADS = 3;
-const STOP_UPLOAD_WAIT_MS = 0;
+const STOP_UPLOAD_WAIT_MS = 20_000;
 const MAX_PENDING_LIVE_AUDIO_BYTES = 2 * 1024 * 1024;
 const MAX_LIVE_SOCKET_BUFFERED_BYTES = 512 * 1024;
 const PREFERRED_MIC_KEY = 'storelisten.preferredMic';
@@ -1265,6 +1265,7 @@ function enqueueUpload(capture, blob, sequence, offset, duration) {
     if (capture.requested) {
       setMicrophoneStatus('Microphone is active', 'ok');
       setCaptureUi(true);
+      showError($('#captureError'), 'The latest audio clip was not confirmed by the server and may be missing from the recordings library. Check the connection.');
     }
   });
   capture.inflightUploads.add(job);
@@ -1467,7 +1468,8 @@ async function stopCapture({ reason = 'manual' } = {}) {
     setCaptureUi(false, false, true);
     sendHealth();
     // Server finish in background — never block Stop / quit / sleep.
-    void request(`/api/v1/audio/sessions/${encodeURIComponent(capture.conversationId)}/finish`, { method: 'POST' })
+    void (capture.uploadQueue || Promise.resolve())
+      .then(() => request(`/api/v1/audio/sessions/${encodeURIComponent(capture.conversationId)}/finish`, { method: 'POST' }))
       .catch(() => undefined);
   })().finally(() => {
     if (state.capture === capture) capture.stopPromise = null;

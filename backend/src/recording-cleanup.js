@@ -14,6 +14,7 @@ const emptyCounts = () => ({
 
 async function removeAudioFiles(recordings, audioStorage) {
   for (const recording of recordings) {
+    if (!recording.storage_key) continue;
     try {
       await audioStorage.delete(recording.storage_key);
     } catch (error) {
