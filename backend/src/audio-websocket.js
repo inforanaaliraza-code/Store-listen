@@ -1,16 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { openDeepgramStream } from './deepgram-stream.js';
-import { translateToEnglish } from './translation.js';
+import { isSpanishTranscript, translateToEnglish } from './translation.js';
 
 const TRANSLATION_PENDING = 'English translation pending';
+const TRANSLATION_UNAVAILABLE = 'English translation unavailable';
 const MAX_QUEUED_AUDIO_BYTES = 1024 * 1024;
 
 function safeSend(socket, payload) {
   if (socket.readyState === 1) socket.send(JSON.stringify(payload));
-}
-
-function isSpanish(languages) {
-  return !languages.length || languages.some((language) => String(language).toLowerCase().startsWith('es'));
 }
 
 export async function attachDeviceAudioSocket(socket, {
@@ -22,6 +19,8 @@ export async function attachDeviceAudioSocket(socket, {
   deepgramApiKey,
   deeplApiKey,
   deeplApiUrl,
+  groqApiKey,
+  groqModel,
   ConversationModel,
   TranscriptSegmentModel,
   publish,
@@ -46,7 +45,7 @@ export async function attachDeviceAudioSocket(socket, {
     const utterance = parts.map((part) => part.transcript).join(' ').replace(/\s+/g, ' ').trim();
     if (!utterance) return;
     const allLanguages = [...new Set(parts.flatMap((part) => part.languages))];
-    const needsTranslation = isSpanish(allLanguages);
+    const needsTranslation = isSpanishTranscript(utterance, allLanguages);
     const confidenceValues = parts.map((part) => part.confidence).filter(Number.isFinite);
     const confidence = confidenceValues.length
       ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
@@ -65,10 +64,12 @@ export async function attachDeviceAudioSocket(socket, {
           english = await translate(utterance, {
             apiKey: deeplApiKey,
             apiUrl: deeplApiUrl,
+            groqApiKey,
+            groqModel,
             signal: AbortSignal.timeout(6000),
           });
         } catch (error) {
-          english = TRANSLATION_PENDING;
+          english = TRANSLATION_UNAVAILABLE;
           console.warn('Live transcript translation unavailable:', error?.message || 'provider error');
         }
       }
@@ -81,7 +82,7 @@ export async function attachDeviceAudioSocket(socket, {
         speaker_id: 'speaker-unknown',
         language: needsTranslation ? 'es' : 'en',
         original_text: utterance,
-        translated_text: english === TRANSLATION_PENDING ? null : english,
+        translated_text: english === TRANSLATION_UNAVAILABLE ? null : english,
         start_time: Math.max(0, sessionOffsetSeconds + startTime),
         end_time: Math.max(sessionOffsetSeconds + startTime, sessionOffsetSeconds + endTime),
         confidence: confidence ?? 0,
@@ -104,7 +105,7 @@ export async function attachDeviceAudioSocket(socket, {
         speakerRole: 'unknown',
         language: needsTranslation ? 'es' : 'en',
         originalText: utterance,
-        translatedText: english === TRANSLATION_PENDING ? '' : english,
+        translatedText: english === TRANSLATION_UNAVAILABLE ? '' : english,
         englishText: english,
         confidence: confidence ?? 0,
         isFinal: true,
@@ -121,8 +122,11 @@ export async function attachDeviceAudioSocket(socket, {
   };
 
   const handleTranscript = (result) => {
-    const languages = result.languages.map((language) => String(language).toLowerCase());
-    const spanish = isSpanish(languages);
+    const languages = [
+      ...result.languages,
+      ...(result.words || []).map((word) => word.language).filter(Boolean),
+    ].map((language) => String(language).toLowerCase());
+    const spanish = isSpanishTranscript(result.transcript, languages);
     const preview = {
       event: 'transcript.partial',
       conversationId: conversation.id,

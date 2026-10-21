@@ -148,7 +148,7 @@
           ? vettedEnglish
           : isEnglishTranslation(translated, original)
             ? translated
-            : 'English translation pending')
+            : 'English translation unavailable')
         : original;
       return { kind: 'en', original, english };
     }).filter(Boolean);

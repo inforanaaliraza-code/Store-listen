@@ -128,3 +128,90 @@ test('audio stop flushes final speech that did not receive a speech-final bounda
   assert.equal(client.sent.find((event) => event.event === 'transcript.final').sessionOffsetSeconds, 12.5);
   assert.equal(client.sent.at(-1).event, 'audio.stopped');
 });
+
+test('detects Spanish from text when Deepgram omits language metadata and translates with Groq fallback', async () => {
+  const client = new FakeClientSocket();
+  const stored = [];
+  let deepgramOptions;
+  let groqOptions;
+
+  await attachDeviceAudioSocket(client, {
+    device: { id: 'device-1', store_id: 'store-1' },
+    conversation: { id: 'conv-spanish-fallback', store_id: 'store-1' },
+    sampleRate: 48000,
+    deepgramApiKey: 'test-deepgram-key',
+    deeplApiKey: '',
+    deeplApiUrl: 'https://api-free.deepl.com',
+    groqApiKey: 'test-groq-key',
+    groqModel: 'test-model',
+    TranscriptSegmentModel: { create: async (row) => stored.push(row) },
+    ConversationModel: { updateOne: async () => {} },
+    publish: () => {},
+    deepgramFactory: async (options) => {
+      deepgramOptions = options;
+      return { sendAudio() {}, close() {}, finish: async () => {} };
+    },
+    translate: async (text, options) => {
+      groqOptions = options;
+      assert.equal(text, '¿Hola, cómo estás?');
+      return 'Hello, how are you?';
+    },
+  });
+
+  await deepgramOptions.onTranscript({
+    transcript: '¿Hola, cómo estás?',
+    isFinal: true,
+    speechFinal: true,
+    languages: [],
+    words: [],
+    confidence: 0.96,
+    start: 0,
+    duration: 1,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(groqOptions.groqApiKey, 'test-groq-key');
+  assert.equal(groqOptions.groqModel, 'test-model');
+  assert.equal(stored[0].language, 'es');
+  assert.equal(stored[0].translated_text, 'Hello, how are you?');
+  assert.equal(client.sent.find((event) => event.event === 'transcript.final').englishText, 'Hello, how are you?');
+});
+
+test('does not route ordinary English speech to translation when language metadata is missing', async () => {
+  const client = new FakeClientSocket();
+  const stored = [];
+  let deepgramOptions;
+
+  await attachDeviceAudioSocket(client, {
+    device: { id: 'device-1', store_id: 'store-1' },
+    conversation: { id: 'conv-english-no-language', store_id: 'store-1' },
+    sampleRate: 48000,
+    deepgramApiKey: 'test-deepgram-key',
+    deeplApiKey: '',
+    deeplApiUrl: 'https://api-free.deepl.com',
+    TranscriptSegmentModel: { create: async (row) => stored.push(row) },
+    ConversationModel: { updateOne: async () => {} },
+    publish: () => {},
+    deepgramFactory: async (options) => {
+      deepgramOptions = options;
+      return { sendAudio() {}, close() {}, finish: async () => {} };
+    },
+    translate: async () => { throw new Error('English speech must not be translated'); },
+  });
+
+  await deepgramOptions.onTranscript({
+    transcript: 'Hello, how are you?',
+    isFinal: true,
+    speechFinal: true,
+    languages: [],
+    words: [],
+    confidence: 0.96,
+    start: 0,
+    duration: 1,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(stored[0].language, 'en');
+  assert.equal(stored[0].translated_text, 'Hello, how are you?');
+  assert.equal(client.sent.find((event) => event.event === 'transcript.final').englishText, 'Hello, how are you?');
+});

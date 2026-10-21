@@ -174,7 +174,7 @@ ipcMain.handle('api-request', async (_event, options) => {
 
 ipcMain.handle('audio-upload', async (_event, payload) => {
   const bytes = Buffer.from(payload.audioBytes);
-  if (!bytes.length || bytes.length > 20 * 1024 * 1024) throw new Error('Audio clip is empty or larger than the 20 MB limit.');
+  if (!bytes.length || bytes.length > 20 * 1024 * 1024) throw new Error('Audio recording is empty or larger than the 20 MB limit.');
   const form = new FormData();
   for (const [key, value] of Object.entries(payload.fields)) form.append(key, String(value));
   form.append('audio', new Blob([bytes], { type: payload.contentType }), payload.filename);
@@ -185,7 +185,7 @@ ipcMain.handle('audio-upload', async (_event, payload) => {
       'X-Device-ID': payload.deviceId,
     },
     body: form,
-    signal: AbortSignal.timeout(28_000),
+    signal: AbortSignal.timeout(payload.fields.is_aggregate === 'true' ? 120_000 : 28_000),
   });
   return readResponse(response);
 });

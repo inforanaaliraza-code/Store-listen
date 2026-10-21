@@ -16,7 +16,8 @@ const LIVE_PREVIEW_ENABLED = voiceDetection.config?.livePreviewEnabled !== false
 const MIN_PREVIEW_BYTES = 4500;
 const RECORDER_TIMESLICE_MS = 100;
 const MAX_PARALLEL_UPLOADS = 3;
-const STOP_UPLOAD_WAIT_MS = 20_000;
+const STOP_UPLOAD_WAIT_MS = 120_000;
+const MAX_FULL_RECORDING_BYTES = 20 * 1024 * 1024;
 const MAX_PENDING_LIVE_AUDIO_BYTES = 2 * 1024 * 1024;
 const MAX_LIVE_SOCKET_BUFFERED_BYTES = 512 * 1024;
 const PREFERRED_MIC_KEY = 'storelisten.preferredMic';
@@ -780,6 +781,20 @@ async function refreshLiveCoaching(capture, segment) {
   }
 }
 
+function scheduleLiveCoaching(capture, segment) {
+  if (!capture.requested || state.capture !== capture) return;
+  window.clearTimeout(capture.coachingTimer);
+  capture.pendingCoachingSegment = segment;
+  capture.coachingTimer = window.setTimeout(() => {
+    capture.coachingTimer = null;
+    const latestSegment = capture.pendingCoachingSegment;
+    capture.pendingCoachingSegment = null;
+    if (latestSegment && capture.requested && state.capture === capture) {
+      void refreshLiveCoaching(capture, latestSegment);
+    }
+  }, 1200);
+}
+
 function showLivePartial(segment) {
   const original = String(segment?.originalText || '').trim();
   if (!original || isClientJunkLive(original)) return;
@@ -1018,6 +1033,7 @@ function addTranscript(segment) {
     && !String(segment.originalText || '').toLowerCase().includes(pendingLive.toLowerCase().slice(0, 12))) {
     paintLiveTrail(pendingLive);
   }
+  if (state.capture?.requested) scheduleLiveCoaching(state.capture, segment);
   state.transcriptCount += 1;
   $('#transcriptCount').textContent = String(state.transcriptCount);
   $('#navTranscriptCount').textContent = String(state.sessions.length);
@@ -1048,7 +1064,7 @@ async function waitForUploadSlot(capture) {
   }
 }
 
-async function uploadSegment(capture, blob, sequence, offset, duration) {
+async function uploadSegment(capture, blob, sequence, offset, duration, isAggregate = false) {
   if (!blob.size) return;
   const uploadStartedAt = performance.now();
   const response = await window.storeListen.uploadAudio({
@@ -1065,13 +1081,17 @@ async function uploadSegment(capture, blob, sequence, offset, duration) {
       capture_sequence: sequence,
       duration_seconds: Math.max(0.1, duration),
       session_offset_seconds: Math.max(0, offset),
+      is_aggregate: String(isAggregate),
     },
   });
   setHidden('#liveTranscriptPreview', true);
   setText('#liveTranscriptPreviewText', '');
   capture.lastRecordingId = response.id || capture.lastRecordingId;
   capture.lastUploadRoundTripMs = Math.round(performance.now() - uploadStartedAt);
-  showError($('#captureError'), '');
+  if (isAggregate) capture.fullRecordingUploadFailed = false;
+  if (!capture.fullRecordingUploadFailed && !capture.fullRecordingOverflow && !capture.fullRecordingFailed) {
+    showError($('#captureError'), '');
+  }
   setApiStatus(true);
 }
 
@@ -1239,7 +1259,7 @@ async function finishLiveAudioSocket(capture) {
   });
 }
 
-function enqueueUpload(capture, blob, sequence, offset, duration) {
+function enqueueUpload(capture, blob, sequence, offset, duration, isAggregate = false) {
   const job = (async () => {
     await waitForUploadSlot(capture);
     capture.activeUploads = (capture.activeUploads || 0) + 1;
@@ -1248,7 +1268,7 @@ function enqueueUpload(capture, blob, sequence, offset, duration) {
       // A short API hiccup (cold start, redeploy) must not swallow what the customer said.
       for (let attempt = 0; ; attempt += 1) {
         try {
-          await uploadSegment(capture, blob, sequence, offset, duration);
+          await uploadSegment(capture, blob, sequence, offset, duration, isAggregate);
           break;
         } catch (error) {
           if (attempt >= 3 || isDeviceSessionExpired(error)) throw error;
@@ -1266,6 +1286,9 @@ function enqueueUpload(capture, blob, sequence, offset, duration) {
       setMicrophoneStatus('Microphone is active', 'ok');
       setCaptureUi(true);
       showError($('#captureError'), 'The latest audio clip was not confirmed by the server and may be missing from the recordings library. Check the connection.');
+    } else if (isAggregate) {
+      capture.fullRecordingUploadFailed = true;
+      showError($('#captureError'), `Full-call recording was not saved: ${error instanceof Error ? error.message : 'server upload failed'}.`);
     }
   });
   capture.inflightUploads.add(job);
@@ -1274,6 +1297,46 @@ function enqueueUpload(capture, blob, sequence, offset, duration) {
     capture.inflightUploads.delete(job);
     refreshUploadDrain(capture);
   });
+}
+
+function beginFullSessionRecorder(capture) {
+  const mimeType = ['audio/webm;codecs=opus', 'audio/webm'].find((type) => MediaRecorder.isTypeSupported(type));
+  if (!mimeType) throw new Error('This device cannot create the full-call WebM recording.');
+
+  const recorder = new MediaRecorder(capture.stream, { mimeType, audioBitsPerSecond: 48_000 });
+  const chunks = [];
+  let byteLength = 0;
+  capture.fullRecordingOverflow = false;
+  capture.fullSessionRecorder = recorder;
+  recorder.ondataavailable = (event) => {
+    if (!event.data.size || capture.fullRecordingOverflow) return;
+    if (byteLength + event.data.size > MAX_FULL_RECORDING_BYTES) {
+      capture.fullRecordingOverflow = true;
+      chunks.length = 0;
+      showError($('#captureError'), 'Full-call recording exceeded the 20 MB limit. Short transcript clips are still being saved.');
+      return;
+    }
+    chunks.push(event.data);
+    byteLength += event.data.size;
+  };
+  recorder.onerror = () => {
+    capture.fullRecordingFailed = true;
+    showError($('#captureError'), 'Full-call recording failed. Short transcript clips are still being saved.');
+  };
+  recorder.onstop = () => {
+    if (capture.fullSessionRecorder === recorder) capture.fullSessionRecorder = null;
+    if (capture.discardFullRecording || capture.fullRecordingOverflow || capture.fullRecordingFailed) return;
+    const blob = new Blob(chunks, { type: mimeType });
+    if (!blob.size) {
+      showError($('#captureError'), 'No full-call audio was captured. Short transcript clips may still be available.');
+      return;
+    }
+    const duration = Math.max((Date.now() - capture.startedAt) / 1000, 0.1);
+    enqueueUpload(capture, blob, 0, 0, duration, true);
+  };
+  recorder.start(1000);
+  capture.startedAt = Date.now();
+  capture.session.startedAt = new Date(capture.startedAt);
 }
 
 function beginRecorder(capture) {
@@ -1442,6 +1505,10 @@ async function stopCapture({ reason = 'manual' } = {}) {
   }
   capture.requested = false;
   capture.speaking = false;
+  window.clearTimeout(capture.coachingTimer);
+  capture.coachingTimer = null;
+  capture.pendingCoachingSegment = null;
+  capture.coachingRequestId += 1;
   window.clearTimeout(capture.audioSocketRetryTimer);
   capture.audioSocketRetryTimer = null;
   clearLivePartial();
@@ -1600,6 +1667,8 @@ async function startCaptureSession() {
       previewAppliedSequence: 0,
       coachingRequestId: 0,
       latestCoachingSequence: 0,
+      coachingTimer: null,
+      pendingCoachingSegment: null,
       spokeInSegment: false,
       segmentPeakRms: 0,
       uploadQueue: Promise.resolve(),
@@ -1619,6 +1688,7 @@ async function startCaptureSession() {
       stopPromise: null,
     };
     const capture = state.capture;
+    beginFullSessionRecorder(capture);
     capture.audioSocket = await liveAudio.createAudioSocket({
       apiBase: state.config.apiBase,
       deviceId: state.config.deviceId,
@@ -1646,6 +1716,10 @@ async function startCaptureSession() {
     monitorVoice(state.capture);
     sendHealth({ speaking: false });
   } catch (error) {
+    if (state.capture?.fullSessionRecorder) {
+      state.capture.discardFullRecording = true;
+      try { state.capture.fullSessionRecorder.stop(); } catch { /* A failed startup may already have stopped the recorder. */ }
+    }
     state.capture?.audioSocket?.close();
     state.capture?.pcmNode?.disconnect();
     if (audioContext && audioContext.state !== 'closed') await audioContext.close();

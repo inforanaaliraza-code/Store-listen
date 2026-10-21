@@ -91,6 +91,8 @@ const sockets = attachWebSockets(server, {
   deepgramApiKey: config.deepgramApiKey,
   deeplApiKey: config.deeplApiKey,
   deeplApiUrl: config.deeplApiUrl,
+  groqApiKey: config.groqApiKey,
+  groqModel: config.groqModel,
 });
 eventHub.publish = sockets.publish;
 

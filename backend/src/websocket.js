@@ -23,6 +23,8 @@ export function attachWebSockets(server, {
   deepgramApiKey,
   deeplApiKey,
   deeplApiUrl,
+  groqApiKey,
+  groqModel,
 }) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const rooms = new Map();
@@ -141,6 +143,8 @@ export function attachWebSockets(server, {
             deepgramApiKey,
             deeplApiKey,
             deeplApiUrl,
+            groqApiKey,
+            groqModel,
             ConversationModel,
             TranscriptSegmentModel,
             publish,

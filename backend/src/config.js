@@ -23,6 +23,18 @@ const deepgramApiKey = String(process.env.DEEPGRAM_API_KEY || '').trim();
 if (/[^\x20-\x7e]/.test(deepgramApiKey)) {
   throw new Error('DEEPGRAM_API_KEY contains invalid characters. Re-enter the key without line breaks.');
 }
+const groqApiKey = String(process.env.GROQ_API_KEY || '').trim();
+if (/[^\x20-\x7e]/.test(groqApiKey)) {
+  throw new Error('GROQ_API_KEY contains invalid characters. Re-enter it without line breaks.');
+}
+const deeplApiKey = String(process.env.DEEPL_API_KEY || '').trim();
+if (/[^\x20-\x7e]/.test(deeplApiKey)) {
+  throw new Error('DEEPL_API_KEY contains invalid characters. Re-enter it without line breaks.');
+}
+const groqModel = String(process.env.GROQ_MODEL || '').trim() || 'llama-3.3-70b-versatile';
+if (groqModel.length > 100 || /[\r\n]/.test(groqModel)) {
+  throw new Error('GROQ_MODEL must be a model name no longer than 100 characters.');
+}
 
 export const config = Object.freeze({
   appEnv,
@@ -32,12 +44,14 @@ export const config = Object.freeze({
   mongoDatabaseName: process.env.MONGO_DATABASE_NAME || 'storelisten',
   demoMode: appEnv === 'production' ? false : process.env.DEMO_MODE === 'true',
   aiProvider: 'rules',
+  groqApiKey,
+  groqModel,
   speechProvider: 'deepgram',
   posProvider: process.env.POS_PROVIDER || 'none',
   storageProvider: process.env.STORAGE_PROVIDER || 'local',
   jwtSecret: process.env.JWT_SECRET || 'local-development-only-change-before-deploy',
   deepgramApiKey,
-  deeplApiKey: process.env.DEEPL_API_KEY || '',
+  deeplApiKey,
   deeplApiUrl: (process.env.DEEPL_API_URL || 'https://api-free.deepl.com').replace(/\/+$/, ''),
   audioStorageDir: path.resolve(process.env.AUDIO_STORAGE_DIR || './storage/audio'),
   audioRetentionDays: numberFromEnv('AUDIO_RETENTION_DAYS', 7),

@@ -7,7 +7,7 @@ import { apiBlob, apiGet, apiPatch, apiPost, type Conversation } from '../../../
 import { englishTranscriptText } from '../../../../lib/english-transcript';
 
 type Segment = { id: string; speaker_id: string; speaker_label?: string; speaker_role?: string; employee_id?: string | null; language: string; original_text: string; translated_text: string | null; english_text?: string; confidence: number; start_time: number };
-type Recording = { id: string; captured_at: string; duration_seconds: number; byte_size: number; sequence: number; speaker_role: string; playback_path: string };
+type Recording = { id: string; captured_at: string; duration_seconds: number; byte_size: number; sequence: number; is_aggregate?: boolean; speaker_role: string; playback_path: string };
 type Opportunity = { id: string; customer_intent: string; product: string; status: string; confidence: number; recommendation: string; manager_note?: string | null };
 type Recommendation = { id: string; title: string; message: string; confidence: number };
 type ConversationReport = {
@@ -215,11 +215,11 @@ export default function ConversationDetailPage() {
             {recordings.length ? <>
               {recordings.slice(0, 1).map((recording) => <div className="analysis-featured-clip" key={recording.id}>
                 <span className="analysis-clip-time">{new Date(recording.captured_at).toLocaleString()}</span>
-                <span className="analysis-clip-duration">{recording.duration_seconds.toFixed(0)} sec · {recording.speaker_role === 'unknown' ? 'Speaker not attributed' : recording.speaker_role}</span>
+                <span className="analysis-clip-duration">{recording.is_aggregate ? 'Full call · ' : ''}{recording.duration_seconds.toFixed(0)} sec · {recording.speaker_role === 'unknown' ? 'Speaker not attributed' : recording.speaker_role}</span>
                 <RecordingPlayer recording={recording} />
               </div>)}
               {recordings.length > 1 ? <div className="analysis-more-clips">{recordings.slice(1).map((recording) => <div className="analysis-clip-row" key={recording.id}>
-                <div><strong>Clip {recording.sequence + 1}</strong><small>{new Date(recording.captured_at).toLocaleTimeString()} · {recording.duration_seconds.toFixed(0)} sec</small></div>
+                <div><strong>{recording.is_aggregate ? 'Full call recording' : `Clip ${recording.sequence + 1}`}</strong><small>{new Date(recording.captured_at).toLocaleTimeString()} · {recording.duration_seconds.toFixed(0)} sec</small></div>
                 <RecordingPlayer recording={recording} />
               </div>)}</div> : null}
               {recordings.length < recordingTotal ? <button className="ghost owner-button" onClick={() => void loadOlderRecordings()} disabled={loadingMore}>{loadingMore ? 'Loading…' : `Load older clips (${recordings.length} of ${recordingTotal})`}</button> : null}
@@ -261,7 +261,7 @@ export default function ConversationDetailPage() {
             </button>
             {segments.length > 0 && segments.every((segment) => segment.speaker_id === 'speaker-unknown') ? <p className="analysis-caveat">Speaker attribution is unknown. The report summarizes transcript content without guessing who said each line.</p> : null}
             {!segments.length && recordingTotal > 0 ? <p className="analysis-caveat">No transcript is available yet. Generate the report to transcribe retained audio locally, then analyze it.</p> : null}
-            <p className="analysis-caveat">Generating a report sends transcript text to Google Gemini. On Google’s free tier, content may be used to improve Google products; use only if your store policy permits.</p>
+            <p className="analysis-caveat">Conversation reports here use local transcript rules. Spanish-to-English translation uses DeepL when configured and may send text to Groq as a fallback. Live desktop coaching and daily report summaries also use Groq; follow your store’s privacy policy.</p>
             <p className="analysis-caveat">AI findings are estimates for human review. Speaker labels are operator-selected, not voice identification.</p>
           </article>
         </div>

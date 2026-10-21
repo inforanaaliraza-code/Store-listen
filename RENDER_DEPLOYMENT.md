@@ -6,10 +6,10 @@ The root `render.yaml` defines the Node.js/Express API and the Vite static front
 
 1. Create a MongoDB Atlas cluster and database user. Use a unique password, TLS, and Render's outbound IP ranges in the Atlas network access list. Do not allow `0.0.0.0/0` unless there is a deliberate, separately reviewed reason.
 2. In Render, create or sync the Blueprint using this repository's root `render.yaml`. The API build installs the standalone backend lockfile with `npm ci --workspaces=false`, so it does not accidentally use the monorepo workspace lock.
-3. Set `MONGODB_URI` and `DEEPGRAM_API_KEY` in the API service's private environment settings. Rotate any Deepgram key that was pasted into chat or otherwise exposed before adding a replacement.
-4. Set `DEEPL_API_KEY` only if Spanish-to-English translation is required; it is optional. The app's coaching, transcript analysis, and daily summaries are deterministic phrase rules and verified aggregates, not generative AI.
+3. Set `MONGODB_URI`, `DEEPGRAM_API_KEY`, and `GROQ_API_KEY` in the API service's private environment settings. Rotate any key that was pasted into chat or otherwise exposed before adding a replacement.
+4. Set `GROQ_MODEL` only to override the default `llama-3.3-70b-versatile`. Groq powers live desktop coaching and daily-report narratives, and is the automatic Spanish-to-English translation fallback when DeepL is not configured or unavailable. Conversation analysis remains local and rule-based. `DEEPL_API_KEY` is optional.
 5. The Blueprint generates `JWT_SECRET`, sets `STORAGE_PROVIDER=gridfs`, and deploys with `DEMO_MODE=false`. Production startup refuses demo mode and mock POS. Until a supported POS integration is configured, `POS_PROVIDER=none` keeps sales ingestion disabled rather than fabricating transactions.
-6. Set a real `DEEPGRAM_API_KEY` and `MONGODB_URI` privately in Render, then wait for the API deployment to pass `/ready` with `mode=live`, a connected database, and `capabilities.transcription=available`. Verify login, device approval, live Deepgram transcription, WebSocket transcript delivery, report generation, and audio upload/read/delete against the deployed services.
+6. Set real `DEEPGRAM_API_KEY`, `GROQ_API_KEY`, and `MONGODB_URI` privately in Render, then wait for the API deployment to pass `/ready` with `mode=live`, a connected database, and `capabilities.transcription`, `capabilities.english_translation`, `capabilities.live_coaching`, and `capabilities.daily_reports` all `available`. Verify login, device approval, live Deepgram transcription, Spanish-to-English WebSocket delivery, Groq coaching/report generation, and audio upload/read/delete against the deployed services.
 
 The current frontend build is configured for `https://store-listen-api-z8yb.onrender.com` and `wss://store-listen-api-z8yb.onrender.com`. If Render assigns different hostnames, update the API CORS origin and both `VITE_API_URL`/`VITE_WS_URL`, then redeploy the frontend because Vite values are embedded at build time.
 
@@ -29,11 +29,13 @@ Required for production:
 
 Optional:
 
+- `GROQ_API_KEY` (required for live desktop coaching, daily-report generation, and English translation when DeepL is not configured; AI endpoints return 503 if unavailable)
+- `GROQ_MODEL` to override the Groq model default
 - `DEEPL_API_KEY` and `DEEPL_API_URL` for translation
 - `POS_PROVIDER=none` until an actual POS integration is implemented and configured
 - `AUDIO_RETENTION_DAYS` and `TRANSCRIPT_RETENTION_DAYS`
 
-Production startup fails closed when the Mongo URI, production JWT secret, Deepgram key, or GridFS storage mode is missing, or if demo mode/mock POS is enabled. No POS vendor connector is currently configured; do not treat empty sales data as connected POS data. Render Free may sleep, has limited CPU/RAM, and cannot provide always-on real-time capture; use a paid service for dependable production operation. MongoDB Atlas and Deepgram have their own availability, capacity, and billing limits.
+Production startup fails closed when the Mongo URI, production JWT secret, Deepgram key, or GridFS storage mode is missing, or if demo mode/mock POS is enabled. The Groq key is optional for API startup but required for AI coaching and daily report generation; `/ready` reports both feature capabilities. No POS vendor connector is currently configured; do not treat empty sales data as connected POS data. Render Free may sleep, has limited CPU/RAM, and cannot provide always-on real-time capture; use a paid service for dependable production operation. MongoDB Atlas, Groq, and Deepgram have their own availability, capacity, and billing limits.
 
 ## Desktop
 

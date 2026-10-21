@@ -9,8 +9,9 @@ import { createAccessToken, readToken, requireAuth, tokenFromRequest, verifyDevi
 import { createLocalAudioStorage } from './audio-storage.js';
 import { addCleanupCounts, deleteConversationAudio, deleteOrphanRecordings, emptyCounts } from './recording-cleanup.js';
 import { transcribeWithDeepgram } from './deepgram-transcribe.js';
-import { translateToEnglish } from './translation.js';
-import { analyzeConversation, createCoachingSuggestion, summarizeDailyReport } from './rule-analysis.js';
+import { isSpanishTranscript, translateToEnglish } from './translation.js';
+import { analyzeConversation } from './rule-analysis.js';
+import { generateGroqCoaching, generateGroqDailySummary } from './groq-ai.js';
 
 export function createApp({
   config,
@@ -44,9 +45,13 @@ export function createApp({
   audioStorage: suppliedAudioStorage,
   deepgramTranscriber = transcribeWithDeepgram,
   englishTranslator = translateToEnglish,
+  groqCoaching = generateGroqCoaching,
+  groqDailySummary = generateGroqDailySummary,
 }) {
   const audioStorage = suppliedAudioStorage || createLocalAudioStorage(config.audioStorageDir);
   const app = express();
+  const translationJobs = new Map();
+  const failedTranslationRetryAt = new Map();
   app.set('trust proxy', config.appEnv === 'production' ? 1 : false);
   app.use(helmet());
   app.use(cors({
@@ -77,12 +82,16 @@ export function createApp({
       database: ready ? 'connected' : 'disconnected',
       capabilities: {
         transcription: config.deepgramApiKey ? 'available' : 'unavailable',
+        english_translation: config.deeplApiKey || config.groqApiKey ? 'available' : 'unavailable',
+        live_coaching: config.groqApiKey ? 'available' : 'unavailable',
+        daily_reports: config.groqApiKey ? 'available' : 'unavailable',
       },
     });
   });
   app.get('/metrics', (_request, response) => response.json({ requests_total: 0, demo_mode: config.demoMode }));
 
   const loginLimiter = rateLimit({ windowMs: 60_000, limit: 10, standardHeaders: true, legacyHeaders: false });
+  const coachingLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true, legacyHeaders: false });
   app.post('/api/v1/auth/login', loginLimiter, async (request, response, next) => {
     try {
       const email = String(request.body?.email || '').trim().toLowerCase();
@@ -288,22 +297,65 @@ export function createApp({
 
   async function toEnglishTranscript(transcript, language) {
     const normalizedLanguage = String(language || '').toLowerCase();
-    const needsTranslation = normalizedLanguage.startsWith('es') || normalizedLanguage === 'multi';
+    const needsTranslation = isSpanishTranscript(transcript, normalizedLanguage);
     if (!needsTranslation) return { englishText: transcript, translatedText: null, translationStatus: 'not_needed' };
     try {
       const translatedText = await englishTranslator(transcript, {
         apiKey: config.deeplApiKey,
         apiUrl: config.deeplApiUrl,
+        groqApiKey: config.groqApiKey,
+        groqModel: config.groqModel,
         signal: AbortSignal.timeout(6000),
       });
       return { englishText: translatedText, translatedText, translationStatus: 'translated' };
     } catch (error) {
       console.warn(`Transcript translation pending; provider request failed: ${error?.message || 'unknown error'}`);
       return {
-        englishText: 'English translation pending',
+        englishText: 'English translation unavailable',
         translatedText: null,
-        translationStatus: 'pending',
+        translationStatus: 'unavailable',
       };
+    }
+  }
+
+  async function repairMissingTranslations(segments) {
+    if (!config.deeplApiKey && !config.groqApiKey) return;
+    const pending = segments.filter((segment) => (
+      !segment.translated_text
+      && segment.is_final !== false
+      && isSpanishTranscript(segment.original_text, segment.language)
+      && (failedTranslationRetryAt.get(segment.id) || 0) <= Date.now()
+    )).slice(0, 5);
+
+    for (let index = 0; index < pending.length; index += 3) {
+      await Promise.all(pending.slice(index, index + 3).map(async (segment) => {
+        let job = translationJobs.get(segment.id);
+        if (!job) {
+          job = (async () => {
+            const translated = await toEnglishTranscript(segment.original_text, segment.language);
+            if (!translated.translatedText) {
+              failedTranslationRetryAt.set(segment.id, Date.now() + 60_000);
+              if (failedTranslationRetryAt.size > 1000) {
+                failedTranslationRetryAt.delete(failedTranslationRetryAt.keys().next().value);
+              }
+              return null;
+            }
+            await TranscriptSegmentModel.updateOne(
+              { id: segment.id, conversation_id: segment.conversation_id },
+              { $set: { translated_text: translated.translatedText } },
+            );
+            failedTranslationRetryAt.delete(segment.id);
+            return translated.translatedText;
+          })().catch((error) => {
+            console.error(`Could not repair saved transcript translation segment=${segment.id}`, error);
+            return null;
+          });
+          translationJobs.set(segment.id, job);
+        }
+        const translatedText = await job;
+        if (translatedText) segment.translated_text = translatedText;
+        if (translationJobs.get(segment.id) === job) translationJobs.delete(segment.id);
+      }));
     }
   }
 
@@ -1189,7 +1241,7 @@ export function createApp({
     }
   });
 
-  app.post('/api/v1/audio/coaching/:conversationId', audioActor, async (request, response, next) => {
+  app.post('/api/v1/audio/coaching/:conversationId', audioActor, coachingLimiter, async (request, response, next) => {
     try {
       let conversationFilter = { id: request.params.conversationId };
       if (request.audioActor.device) {
@@ -1209,18 +1261,39 @@ export function createApp({
         .sort({ start_time: -1, created_at: -1, id: -1 })
         .limit(5)
         .lean();
-      const contextLines = segments.reverse().map((segment) => {
-        return englishTranscriptText(segment) || '';
-      }).filter(Boolean);
+      const contextLines = segments.reverse().map((segment) => ({
+        speaker: segment.speaker_id === 'speaker-customer' ? 'customer'
+          : segment.speaker_id?.startsWith('speaker-employee-') ? 'employee' : 'unknown',
+        text: englishTranscriptText(segment) || '',
+      })).filter((line) => line.text);
       if (!contextLines.length) return response.status(409).json({ detail: 'No English conversation text is ready for coaching yet.' });
-      const recentText = contextLines.slice(-2).join(' ').toLowerCase();
-      const output = createCoachingSuggestion(recentText);
+      if (!config.groqApiKey) return response.status(503).json({ detail: 'Live AI coaching is not configured. Set GROQ_API_KEY on the backend service.' });
+      const [inventory, storeRules] = await Promise.all([
+        StockItemModel?.find({ store_id: conversation.store_id }).limit(30).lean() || [],
+        StoreRuleModel?.find({ store_id: conversation.store_id, active: true }).limit(20).lean() || [],
+      ]);
+      const output = await groqCoaching({
+        apiKey: config.groqApiKey,
+        model: config.groqModel,
+        transcript: contextLines,
+        inventory: inventory.map((item) => ({
+          name: item.name,
+          sku: item.sku,
+          price: typeof item.price === 'number' && Number.isFinite(item.price) ? item.price : null,
+          quantity: typeof item.quantity === 'number' && Number.isFinite(item.quantity) ? item.quantity : null,
+        })),
+        storeRules: storeRules.map((rule) => ({
+          name: rule.name,
+          trigger: rule.trigger_condition,
+          action: rule.expected_action,
+        })),
+      });
       return response.json({
         conversation_id: conversation.id,
         context_turns: contextLines.length,
         suggestion: {
           title: 'Suggested response',
-          message: output.recommendation.slice(0, 500),
+          message: output.recommendation,
           confidence: Math.min(1, Math.max(0, Number(output.confidence) || 0)),
         },
         alerts: output.alerts,
@@ -1243,6 +1316,11 @@ export function createApp({
       if (!conversation || conversation.status !== 'LIVE') return response.status(404).json({ detail: 'Live audio session not found' });
 
       const contentType = (request.file.mimetype || '').split(';')[0].toLowerCase();
+      const isAggregate = request.body.is_aggregate === 'true';
+      const requestedDuration = Number(request.body.duration_seconds);
+      if (isAggregate && (!Number.isFinite(requestedDuration) || requestedDuration <= 0 || requestedDuration > 3600)) {
+        return response.status(422).json({ detail: 'Full recording duration must be between 0 and 3600 seconds.' });
+      }
       const captureAt = new Date();
       storageKey = await audioStorage.save(request.file.buffer, contentType, captureAt);
       const retainDays = config.audioRetentionDays;
@@ -1253,10 +1331,12 @@ export function createApp({
         storage_key: storageKey,
         content_type: contentType,
         byte_size: request.file.size,
-        duration_seconds: Math.min(60, Math.max(0.1, Number(request.body.duration_seconds) || 0.1)),
-        sequence: Math.max(0, Number.parseInt(request.body.capture_sequence || '0', 10) || 0),
+        duration_seconds: isAggregate
+          ? requestedDuration
+          : Math.min(60, Math.max(0.1, Number(request.body.duration_seconds) || 0.1)),
+        sequence: isAggregate ? 0 : Math.max(0, Number.parseInt(request.body.capture_sequence || '0', 10) || 0),
         speaker_role: 'unknown',
-        is_aggregate: false,
+        is_aggregate: isAggregate,
         captured_at: captureAt,
         retain_until: new Date(captureAt.getTime() + retainDays * 86_400_000),
       });
@@ -2184,8 +2264,8 @@ export function createApp({
           provider: 'rules',
           speech_provider: config.speechProvider,
           supports_original_transcript: true,
-          supports_english_translation: Boolean(config.deeplApiKey),
-          provider_note: 'Conversation signals and reports use local phrase rules; Deepgram handles transcription and DeepL handles optional English translation.',
+          supports_english_translation: Boolean(config.deeplApiKey || config.groqApiKey),
+          provider_note: 'Deepgram handles transcription; Spanish-to-English uses DeepL when configured and otherwise falls back to Groq.',
         },
         security: {
           authentication: 'jwt+httpOnly-cookie',
@@ -2538,6 +2618,7 @@ export function createApp({
         TranscriptSegmentModel.countDocuments(segmentFilter),
         ParticipantModel?.find(segmentFilter).lean() || [],
       ]);
+      await repairMissingTranslations(segments);
       const speakerDetails = new Map();
       for (const participant of participants) {
         const speakerId = participant.mapped_role === 'customer'
@@ -2561,7 +2642,7 @@ export function createApp({
           language: row.language || 'und',
           original_text: row.original_text,
           translated_text: row.translated_text || null,
-          english_text: row.translated_text || (row.language === 'en' ? row.original_text : 'English translation pending'),
+          english_text: row.translated_text || (row.language === 'en' ? row.original_text : 'English translation unavailable'),
           start_time: row.start_time || 0,
           end_time: row.end_time || 0,
           confidence: row.confidence || 0,
@@ -2641,11 +2722,12 @@ export function createApp({
       const page = Math.max(1, Number.parseInt(request.query.page || '1', 10) || 1);
       const pageSize = Math.min(100, Math.max(1, Number.parseInt(request.query.page_size || '20', 10) || 20));
       const [rows, total] = await Promise.all([
-        AudioRecordingModel.find(filter).sort({ captured_at: -1, sequence: -1 }).skip((page - 1) * pageSize).limit(pageSize).lean(),
+        AudioRecordingModel.find(filter).sort({ is_aggregate: -1, captured_at: -1, sequence: -1 }).skip((page - 1) * pageSize).limit(pageSize).lean(),
         AudioRecordingModel.countDocuments(filter),
       ]);
-      return response.json({ total, page, page_size: pageSize, recordings: rows.map(({ id, captured_at, duration_seconds, byte_size, sequence, content_type, retain_until }) => ({
+      return response.json({ total, page, page_size: pageSize, recordings: rows.map(({ id, captured_at, duration_seconds, byte_size, sequence, content_type, retain_until, is_aggregate }) => ({
         id, captured_at, duration_seconds, byte_size, sequence, content_type, retain_until,
+        is_aggregate: Boolean(is_aggregate),
         playback_path: `/api/v1/audio/recordings/${id}`,
       })) });
     } catch (error) { return next(error); }
@@ -2684,7 +2766,7 @@ export function createApp({
       const page = Math.max(1, Number.parseInt(request.query.page || '1', 10) || 1);
       const pageSize = Math.min(100, Math.max(1, Number.parseInt(request.query.page_size || '25', 10) || 25));
       const [rows, total] = await Promise.all([
-        AudioRecordingModel.find(filter).sort({ captured_at: -1, sequence: -1 }).skip((page - 1) * pageSize).limit(pageSize).lean(),
+        AudioRecordingModel.find(filter).sort({ captured_at: -1, is_aggregate: -1, sequence: -1 }).skip((page - 1) * pageSize).limit(pageSize).lean(),
         AudioRecordingModel.countDocuments(filter),
       ]);
       const conversationIds = [...new Set(rows.map((row) => row.conversation_id).filter(Boolean))];
@@ -2696,7 +2778,7 @@ export function createApp({
       const conversationsById = new Map(conversations.map((row) => [row.id, row]));
       const storesById = new Map(stores.map((row) => [row.id, row]));
       const snippets = new Map();
-      for (const segment of segments) if (!snippets.has(segment.conversation_id)) snippets.set(segment.conversation_id, segment.translated_text || (segment.language === 'en' ? segment.original_text : 'English translation pending'));
+      for (const segment of segments) if (!snippets.has(segment.conversation_id)) snippets.set(segment.conversation_id, segment.translated_text || (segment.language === 'en' ? segment.original_text : 'English translation unavailable'));
       return response.json({
         recordings: rows.map((row) => ({
           id: row.id,
@@ -2704,6 +2786,7 @@ export function createApp({
           duration_seconds: row.duration_seconds || 0,
           byte_size: row.byte_size || 0,
           sequence: row.sequence || 0,
+          is_aggregate: Boolean(row.is_aggregate),
           speaker_role: row.speaker_role || 'unknown',
           store_id: row.store_id,
           store_name: storesById.get(row.store_id)?.name || row.store_id,
@@ -2826,7 +2909,25 @@ export function createApp({
         started_at: conversation.started_at,
         transcript: (transcriptByConversation.get(conversation.id) || []).join(' ').slice(0, 1200),
       })).filter((item) => item.transcript).slice(0, 30);
-      const summary = summarizeDailyReport(report.metrics, evidence);
+      if (!config.groqApiKey) return response.status(503).json({ detail: 'Daily AI reports are not configured. Set GROQ_API_KEY on the backend service.' });
+      const summary = await groqDailySummary({
+        apiKey: config.groqApiKey,
+        model: config.groqModel,
+        businessDate,
+        store: {
+          name: store.name,
+          city: store.city || '',
+          region: store.region || '',
+          timezone: store.timezone || 'UTC',
+        },
+        metrics: report.metrics,
+        evidence,
+      });
+      if (!summary?.headline || !summary?.executive_summary
+        || !Array.isArray(summary.findings) || !summary.findings.length
+        || !Array.isArray(summary.actions_for_tomorrow) || !summary.actions_for_tomorrow.length) {
+        return response.status(503).json({ detail: 'Groq AI returned an incomplete daily report; no report was saved. Retry generation.' });
+      }
       const generatedAt = new Date().toISOString();
       const stringList = (value) => Array.isArray(value) ? value.filter((item) => typeof item === 'string').map((item) => item.slice(0, 500)).slice(0, 10) : [];
       const executiveSummary = String(summary.executive_summary || 'Insufficient evidence for an executive summary.').slice(0, 3000);
@@ -2917,20 +3018,11 @@ export function createApp({
       sentiment.sample_size = sentimentSampleSize;
       const keyPoints = stringList(summary.findings).length
         ? stringList(summary.findings)
-        : stringList(summary.key_points).length
-          ? stringList(summary.key_points)
-          : [
-            report.daily_analysis.sales_summary,
-            report.daily_analysis.interaction_summary,
-          ].filter(Boolean);
+        : [];
       const actions = stringList(summary.actions_for_tomorrow);
-      const provider = summary.provider || 'rules';
-      if (!actions.length) {
-        if (report.metrics.potential_missed_opportunities) actions.push(`Review ${report.metrics.potential_missed_opportunities} potential opportunity signal(s) with a manager before assigning follow-up.`);
-        if (report.metrics.low_stock) actions.push(`Check ${report.metrics.low_stock} below-par inventory item(s) and confirm replenishment needs.`);
-        if (!report.metrics.transcript_segments && report.metrics.conversations) actions.push('Check microphone placement and capture health; no transcript segments were recorded.');
-        if (!report.metrics.sales_data_available) actions.push('Connect a live POS feed before drawing conclusions about sales or revenue.');
-        if (!actions.length) actions.push('Review the conversation summaries and assign any customer follow-up that is still needed.');
+      const provider = 'groq';
+      if (!keyPoints.length || !actions.length) {
+        return response.status(503).json({ detail: 'Groq AI returned an incomplete daily report; no report was saved. Retry generation.' });
       }
       const kpis = {
         revenue: {

@@ -4,13 +4,14 @@
       ? Math.max(0, options.maxUploadWaitMs)
       : 0;
 
-    const recorder = capture.recorder;
-    if (recorder && recorder.state !== 'inactive') {
-      await new Promise((resolve) => {
+    const recorders = [...new Set([capture.recorder, capture.fullSessionRecorder].filter(Boolean))];
+    await Promise.all(recorders.map((recorder) => {
+      if (recorder.state === 'inactive') return Promise.resolve();
+      return new Promise((resolve) => {
         recorder.addEventListener('stop', resolve, { once: true });
         recorder.stop();
       });
-    }
+    }));
 
     capture.stream?.getTracks().forEach((track) => track.stop());
     capture.stream = null;

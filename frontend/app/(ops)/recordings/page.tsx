@@ -9,6 +9,7 @@ type Recording = {
   id: string;
   captured_at: string;
   duration_seconds: number;
+  is_aggregate?: boolean;
   byte_size: number;
   speaker_role: string;
   store_id: string;
@@ -245,7 +246,7 @@ export default function RecordingsPage() {
           <h1 className="serif">Recordings Library</h1>
           <p>View, select, and permanently delete historical conversations.</p>
         </div>
-        <span className="recordings-total">{data?.total ?? 0} clips</span>
+        <span className="recordings-total">{data?.total ?? 0} recordings</span>
       </div>
 
       <section className="recordings-toolbar" aria-label="Recording filters">
@@ -314,7 +315,7 @@ export default function RecordingsPage() {
               {recording.conversation_path
                 ? <Link className="recording-id" href={recording.conversation_path}>{recording.id.slice(0, 14)}</Link>
                 : <span className="recording-id">{recording.id.slice(0, 14)}</span>}
-              <small>{recording.store_name} · {Math.round(recording.duration_seconds)} sec</small>
+              <small>{recording.is_aggregate ? 'Full call · ' : ''}{recording.store_name} · {Math.round(recording.duration_seconds)} sec</small>
             </td>
             <td>{new Date(recording.captured_at).toLocaleString()}</td>
             <td><span className={`recording-state ${recording.conversation_status.toLowerCase()}`}>{recording.conversation_status}</span></td>

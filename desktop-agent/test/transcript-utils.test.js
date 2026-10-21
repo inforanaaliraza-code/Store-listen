@@ -66,8 +66,8 @@ test('mixed Spanish is shown only as English even when speech detection reports 
   const [pendingPart] = paragraphParts([{ segment: { originalText: mixed, language: 'en' } }]);
 
   assert.equal(translatedPart.english, translated);
-  assert.equal(pendingPart.english, 'English translation pending');
-  assert.doesNotMatch(pendingPart.english, /translation unavailable|Madrid|amigas/i);
+  assert.equal(pendingPart.english, 'English translation unavailable');
+  assert.doesNotMatch(pendingPart.english, /Madrid|amigas/i);
 });
 
 test('TXT export uses paragraph flow with staff English line', () => {

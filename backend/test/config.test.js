@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const backendDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const configurationModule = "import('./src/config.js').then(({ config }) => console.log(JSON.stringify({ demoMode: config.demoMode, deepgramApiKey: config.deepgramApiKey })))";
+const configurationModule = "import('./src/config.js').then(({ config }) => console.log(JSON.stringify({ demoMode: config.demoMode, deepgramApiKey: config.deepgramApiKey, deeplApiKey: config.deeplApiKey })))";
 const productionEnvironment = {
   ...process.env,
   APP_ENV: 'production',
@@ -47,7 +47,7 @@ test('production config fails closed without Deepgram or durable GridFS storage'
   assert.equal(validProductionConfig.status, 0, validProductionConfig.stderr);
 });
 
-test('production config trims line endings from Deepgram keys and rejects embedded control characters', () => {
+test('production config trims provider key line endings and rejects embedded control characters', () => {
   const trailingNewline = loadConfiguration({
     ...productionEnvironment,
     DEEPGRAM_API_KEY: 'test-deepgram-key\r\n',
@@ -61,4 +61,18 @@ test('production config trims line endings from Deepgram keys and rejects embedd
   });
   assert.notEqual(embeddedNewline.status, 0);
   assert.match(embeddedNewline.stderr, /DEEPGRAM_API_KEY contains invalid characters/);
+
+  const deeplTrailingNewline = loadConfiguration({
+    ...productionEnvironment,
+    DEEPL_API_KEY: 'test-deepl-key\r\n',
+  });
+  assert.equal(deeplTrailingNewline.status, 0, deeplTrailingNewline.stderr);
+  assert.match(deeplTrailingNewline.stdout, /"deeplApiKey":"test-deepl-key"/);
+
+  const deeplEmbeddedNewline = loadConfiguration({
+    ...productionEnvironment,
+    DEEPL_API_KEY: 'test-deepl\n-key',
+  });
+  assert.notEqual(deeplEmbeddedNewline.status, 0);
+  assert.match(deeplEmbeddedNewline.stderr, /DEEPL_API_KEY contains invalid characters/);
 });

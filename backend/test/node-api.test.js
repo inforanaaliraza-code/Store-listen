@@ -202,6 +202,10 @@ before(async () => {
   const TranscriptSegmentModel = {
     create: async (row) => { transcriptSegments.push(row); return row; },
     findOne: (filter) => mutableModel(transcriptSegments).findOne(filter),
+    updateOne: async (filter, update) => {
+      const row = transcriptSegments.find((item) => matchesFilter(item, filter));
+      if (row) Object.assign(row, update.$set || {});
+    },
     countDocuments: async (filter) => transcriptSegments.filter((row) => matchesFilter(row, filter)).length,
     find: (filter) => arrayQuery(transcriptSegments.filter((row) => matchesFilter(row, filter))),
     deleteMany: async (filter) => {
@@ -220,6 +224,8 @@ before(async () => {
     posProvider: 'mock',
     storageProvider: 'local',
     deepgramApiKey: 'test-deepgram-key',
+    groqApiKey: 'test-groq-key',
+    groqModel: 'test-groq-model',
     audioStorageDir: audioDirectory,
     audioRetentionDays: 7,
     transcriptRetentionDays: 30,
@@ -259,7 +265,28 @@ before(async () => {
       confidence: 0.97,
       requestId: 'request-test',
     }),
-    englishTranslator: async () => 'Hello, I need a charger.',
+    englishTranslator: async (_text, options) => {
+      assert.equal(options.groqApiKey, 'test-groq-key');
+      assert.equal(options.groqModel, 'test-groq-model');
+      return 'Hello, I need a charger.';
+    },
+    groqCoaching: async ({ transcript }) => {
+      assert.equal(transcript.at(-1).text, 'I need a charger.');
+      return {
+        recommendation: 'Ask which charger connector the customer needs.',
+        confidence: 0.92,
+        alerts: [{ title: 'Confirm compatibility', message: 'Ask about the customer’s phone connector before recommending a charger.' }],
+        provider: 'groq',
+      };
+    },
+    groqDailySummary: async () => ({
+      headline: 'Charger interest and one verified POS sale',
+      executive_summary: 'One conversation discussed a charger; one verified POS transaction was recorded.',
+      findings: ['A customer asked about a phone charger.'],
+      actions_for_tomorrow: ['Confirm charger compatibility when customers ask.'],
+      confidence: 0.9,
+      provider: 'groq',
+    }),
   });
   server = app.listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
@@ -288,7 +315,12 @@ test('readiness reports database, deployment mode, and transcription capability'
     status: 'ready',
     mode: 'demo',
     database: 'connected',
-    capabilities: { transcription: 'available' },
+    capabilities: {
+      transcription: 'available',
+      english_translation: 'available',
+      live_coaching: 'available',
+      daily_reports: 'available',
+    },
   });
 
   const configuredKey = testConfig.deepgramApiKey;
@@ -296,7 +328,12 @@ test('readiness reports database, deployment mode, and transcription capability'
     delete testConfig.deepgramApiKey;
     const missingTranscriber = await fetch(`${baseUrl}/ready`);
     assert.equal(missingTranscriber.status, 200);
-    assert.deepEqual((await missingTranscriber.json()).capabilities, { transcription: 'unavailable' });
+    assert.deepEqual((await missingTranscriber.json()).capabilities, {
+      transcription: 'unavailable',
+      english_translation: 'available',
+      live_coaching: 'available',
+      daily_reports: 'available',
+    });
   } finally {
     testConfig.deepgramApiKey = configuredKey;
   }
@@ -376,11 +413,27 @@ test('audio session lifecycle stores recordings without retranscribing', async (
   assert.equal(recordings[0].byte_size, 4);
   assert.equal(recordings[0].duration_seconds, 4.8);
 
+  const fullCall = new FormData();
+  fullCall.set('store_id', 'store-1');
+  fullCall.set('conversation_id', session.conversation_id);
+  fullCall.set('is_aggregate', 'true');
+  fullCall.set('duration_seconds', '92.4');
+  fullCall.set('audio', new Blob([Buffer.from([5, 6, 7, 8])], { type: 'audio/webm' }), 'full-call.webm');
+  const fullCallUpload = await fetch(`${baseUrl}/api/v1/audio/recordings`, { method: 'POST', headers, body: fullCall });
+  assert.equal(fullCallUpload.status, 201, await fullCallUpload.text());
+  const fullCallRecording = recordings.at(-1);
+  assert.equal(fullCallRecording.is_aggregate, true);
+  assert.equal(fullCallRecording.duration_seconds, 92.4);
+
+  const conversationAudio = await fetch(`${baseUrl}/api/v1/conversations/${session.conversation_id}/audio`, { headers });
+  const audioList = await conversationAudio.json();
+  assert.equal(audioList.recordings.some((recording) => recording.id === fullCallRecording.id && recording.is_aggregate), true);
+
   const finished = await fetch(`${baseUrl}/api/v1/audio/sessions/${session.conversation_id}/finish`, { method: 'POST', headers });
   const result = await finished.json();
   assert.equal(finished.status, 200);
   assert.equal(result.status, 'ENDED');
-  assert.equal(result.recordings, 1);
+  assert.equal(result.recordings, 2);
 });
 
 test('multipart speech transcription sends English text and persists Deepgram transcript', async () => {
@@ -479,6 +532,19 @@ test('conversation transcript and recording reads preserve existing API contract
     is_final: true,
     created_at: startedAt,
   });
+  transcriptSegments.push({
+    id: 'segment-read-untranslated-test',
+    conversation_id: conversationId,
+    speaker_id: 'speaker-customer',
+    language: 'es',
+    original_text: '¿Hola, cómo estás?',
+    translated_text: null,
+    start_time: 3,
+    end_time: 4,
+    confidence: 0.93,
+    is_final: true,
+    created_at: startedAt,
+  });
   recordings.push({
     id: recordingId,
     store_id: 'store-1',
@@ -502,6 +568,8 @@ test('conversation transcript and recording reads preserve existing API contract
   const transcriptBody = await transcript.json();
   assert.equal(transcript.status, 200);
   assert.equal(transcriptBody.segments[0].english_text, 'Hello, I need a charger.');
+  assert.equal(transcriptBody.segments.find((segment) => segment.id === 'segment-read-untranslated-test').english_text, 'Hello, I need a charger.');
+  assert.equal(transcriptSegments.find((segment) => segment.id === 'segment-read-untranslated-test').translated_text, 'Hello, I need a charger.');
 
   const library = await fetch(`${baseUrl}/api/v1/recordings?store_id=store-1&page_size=10`, { headers });
   const libraryBody = await library.json();
@@ -890,7 +958,9 @@ test('speaker attribution is scoped and coaching uses only English transcript te
   const coachingBody = await coaching.json();
   assert.equal(coaching.status, 200);
   assert.equal(coachingBody.conversation_id, conversationId);
-  assert.equal(coachingBody.suggestion.message, 'Acknowledge the request and ask one concise clarifying question.');
+  assert.equal(coachingBody.suggestion.message, 'Ask which charger connector the customer needs.');
+  assert.equal(coachingBody.provider, 'groq');
+  assert.equal(coachingBody.alerts[0].title, 'Confirm compatibility');
 
   transcriptSegments.push({
     id: 'segment-untranslated-test',
@@ -1054,7 +1124,7 @@ test('daily reports use live evidence, persist provider output, and expose repor
     assert.equal(generated.status, 200);
     assert.equal(payload.dataMode, 'live');
     assert.equal(payload.daily_analysis.provider_summary.status, 'completed');
-    assert.equal(payload.daily_analysis.provider_summary.provider, 'rules');
+    assert.equal(payload.daily_analysis.provider_summary.provider, 'groq');
     assert.equal(payload.metrics.sales_count, 1);
     assert.equal(payload.store_listener.interactions[0].transcript_summary, 'Do you have a phone charger?');
     assert.equal(dailyReports.some((row) => row.id === `daily-store-1-${businessDate}`), true);

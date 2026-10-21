@@ -65,3 +65,27 @@ test('releases the microphone before waiting for final recording uploads', async
   await stopping;
   assert.equal(capture.stream, null);
 });
+
+test('stops both phrase clips and the continuous full-call recorder before releasing input', async () => {
+  const stopped = [];
+  function recorder(name) {
+    return {
+      state: 'recording',
+      addEventListener(_event, listener) { this.listener = listener; },
+      stop() {
+        this.state = 'inactive';
+        stopped.push(name);
+        this.listener();
+      },
+    };
+  }
+  const capture = {
+    recorder: recorder('clip'),
+    fullSessionRecorder: recorder('full-call'),
+    stream: { getTracks: () => [{ stop: () => stopped.push('microphone') }] },
+    audioContext: { state: 'closed' },
+  };
+
+  await stopCaptureAndDrain(capture, null);
+  assert.deepEqual(stopped, ['clip', 'full-call', 'microphone']);
+});
