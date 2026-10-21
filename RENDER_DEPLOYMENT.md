@@ -5,7 +5,7 @@ The root `render.yaml` defines the Node.js/Express API and the Vite static front
 ## Required setup
 
 1. Create a MongoDB Atlas cluster and database user. Use a unique password, TLS, and Render's outbound IP ranges in the Atlas network access list. Do not allow `0.0.0.0/0` unless there is a deliberate, separately reviewed reason.
-2. In Render, create or sync the Blueprint using this repository's root `render.yaml`.
+2. In Render, create or sync the Blueprint using this repository's root `render.yaml`. The API build installs the standalone backend lockfile with `npm ci --workspaces=false`, so it does not accidentally use the monorepo workspace lock.
 3. Set `MONGODB_URI` and `DEEPGRAM_API_KEY` in the API service's private environment settings. Rotate any Deepgram key that was pasted into chat or otherwise exposed before adding a replacement.
 4. Set `DEEPL_API_KEY` only if Spanish-to-English translation is required; it is optional. The app's coaching, transcript analysis, and daily summaries are deterministic phrase rules and verified aggregates, not generative AI.
 5. The Blueprint generates `JWT_SECRET`, sets `STORAGE_PROVIDER=gridfs`, and keeps `DEMO_MODE=true` with mock POS data. Do not use demo mode or mock records for customer reporting.

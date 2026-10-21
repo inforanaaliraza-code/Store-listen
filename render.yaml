@@ -5,7 +5,7 @@ services:
     plan: free
     region: ohio
     rootDir: backend
-    buildCommand: npm ci
+    buildCommand: npm ci --workspaces=false
     startCommand: npm start
     healthCheckPath: /ready
     envVars:
