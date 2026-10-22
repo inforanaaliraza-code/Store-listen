@@ -1287,6 +1287,8 @@ test('daily reports use live evidence, persist provider output, and expose repor
       Authorization: `Bearer ${createAccessToken(adminUser, secret)}`,
       'content-type': 'application/json',
     };
+    const orgStores = await fetch(`${baseUrl}/api/v1/stores?page_size=100`, { headers: orgAdminHeaders });
+    assert.deepEqual((await orgStores.json()).stores.items.map((item) => item.id), ['store-1', 'store-3']);
     const combined = await fetch(`${baseUrl}/api/v1/reports/daily/generate`, {
       method: 'POST',
       headers: orgAdminHeaders,

@@ -1888,10 +1888,9 @@ button { cursor: pointer; }
   .shell:has(.sl-report-page-root) { display: block; background: #fff; }
   .shell:has(.sl-report-page-root) .main { max-width: none; padding: 0; }
   .sl-report-document { display: block; }
-  .sl-report-sheet { width: auto; min-height: 0; height: auto; margin: 0; padding: .16in .24in .1in; border: 0; box-shadow: none; }
-  .sl-summary-sheet { break-after: page; page-break-after: always; }
-  .sl-interactions-sheet { break-before: auto; page-break-before: auto; }
-  .sl-sheet-footer { margin-top: 10px; padding-top: 7px; color: #5f6877; }
+  .sl-report-sheet { display: block; width: auto; min-height: 0; height: auto; margin: 0; padding: .12in .2in .08in; border: 0; box-shadow: none; }
+  .sl-summary-sheet, .sl-interactions-sheet { break-before: auto; break-after: auto; page-break-before: auto; page-break-after: auto; }
+  .sl-sheet-footer { margin-top: 9px; padding-top: 6px; color: #5f6877; }
   .sl-summary-grid { gap: 18px; margin-top: 16px; }
   .sl-summary-copy, .sl-summary-insights { gap: 13px; }
   .sl-kpi-grid { gap: 8px; margin-top: 14px; }

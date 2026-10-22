@@ -182,9 +182,10 @@ export function createApp({
 
   async function visibleStoreIds(user) {
     if (user.role === 'SUPER_ADMIN') return null;
-    if (user.store_id) return [user.store_id];
-    if (user.role !== 'ORG_ADMIN') return [];
-    return (await StoreModel.find({ organization_id: user.organization_id }).select({ id: 1 }).lean()).map((store) => store.id);
+    if (user.role === 'ORG_ADMIN') {
+      return (await StoreModel.find({ organization_id: user.organization_id }).select({ id: 1 }).lean()).map((store) => store.id);
+    }
+    return user.store_id ? [user.store_id] : [];
   }
 
   async function scopedStoreFilter(user, field = 'store_id') {
