@@ -29,11 +29,51 @@ type StoreListenerReport = {
     products_discussed?: string[];
     opportunity_type?: string;
     conversation_id?: string;
+    store_name?: string;
+    full_transcript?: string;
+  }[];
+  store_breakdown?: {
+    store_id: string;
+    store_name: string;
+    location: string;
+    metrics: Record<string, number | boolean | Record<string, number>>;
+  }[];
+  opportunities?: {
+    id: string;
+    store_name: string;
+    conversation_id: string | null;
+    customer_intent: string;
+    product: string;
+    status: string;
+    recommendation: string;
+    manager_note: string;
+    confidence: number | null;
+    created_at: string | null;
+  }[];
+  low_stock_items?: {
+    store_id: string;
+    store_name: string;
+    sku: string;
+    name: string;
+    quantity: number;
+    par_level: number;
+  }[];
+  transactions?: {
+    id: string;
+    store_name: string;
+    occurred_at: string | null;
+    timezone: string;
+    amount: number;
+    currency: string;
+    provider: string;
+    items: { name: string; sku: string; quantity: number; unit_price: number | null }[];
   }[];
 };
 
 type ReportPayload = {
   reportType: string;
+  store_id?: string;
+  scope?: string;
   reportStatus?: 'generated' | 'not_generated' | string;
   generatedAt?: string;
   business_date?: string;
@@ -93,6 +133,21 @@ function formatDuration(seconds: number) {
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
+function formatCurrency(amount: number, currency: string) {
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${currency}`;
+  }
+}
+
+function formatRevenueByCurrency(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'N/A';
+  const entries = Object.entries(value as Record<string, number>);
+  if (!entries.length) return 'N/A';
+  return entries.map(([currency, amount]) => formatCurrency(Number(amount), currency)).join(' · ');
+}
+
 export function ReportView({ period }: { period: string }) {
   const [data, setData] = useState<ReportPayload | null>(null);
   const [stores, setStores] = useState<Store[]>([]);
@@ -144,6 +199,7 @@ export function ReportView({ period }: { period: string }) {
   }
 
   const sl = data?.store_listener;
+  const allStoresReport = data?.scope === 'all_stores' || data?.store_id === 'all';
 
   if (!data && !error) return <div className="skeleton" />;
 
@@ -158,6 +214,7 @@ export function ReportView({ period }: { period: string }) {
         <div className="sl-report-filters">
           <label className="field" style={{ margin: 0 }}>Store
             <select className="search" value={storeId} onChange={(event) => setStoreId(event.target.value)}>
+              {period === 'daily' && stores.length > 1 ? <option value="all">All stores combined</option> : null}
               {stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}
             </select>
           </label>
@@ -182,7 +239,7 @@ export function ReportView({ period }: { period: string }) {
             <header className="sl-sheet-masthead">
               <span>{sl.generated_at ? new Date(sl.generated_at).toLocaleString() : formatBusinessDate(sl.report_date)}</span>
               <strong>{sl.brand}</strong>
-              <span>01 / 02</span>
+              <span>DAILY SUMMARY</span>
             </header>
             <div className="sl-report-intro">
               <p className="sl-brand">{sl.brand}</p>
@@ -238,14 +295,30 @@ export function ReportView({ period }: { period: string }) {
                 </section>
               </div>
             </div>
-            <footer className="sl-sheet-footer"><span>{window.location.origin}/reports</span><span>1 / 2</span></footer>
+            {sl.store_breakdown?.length ? (
+              <section className="sl-report-section sl-store-breakdown">
+                <h3><span className="sl-section-mark sl-section-mark-blue" />Store-by-store summary</h3>
+                <div className="sl-table-scroll"><table className="sl-detail-table">
+                  <thead><tr><th>Store</th><th>Conversations</th><th>POS sales</th><th>POS revenue</th><th>Opportunities</th><th>Low stock</th></tr></thead>
+                  <tbody>{sl.store_breakdown.map((item) => <tr key={item.store_id}>
+                    <th>{item.store_name}{item.location ? <small>{item.location}</small> : null}</th>
+                    <td>{Number(item.metrics.conversations || 0)}</td>
+                    <td>{item.metrics.sales_data_available ? Number(item.metrics.sales_count || 0) : 'N/A'}</td>
+                    <td>{item.metrics.sales_data_available ? formatRevenueByCurrency(item.metrics.revenue_by_currency) : 'N/A'}</td>
+                    <td>{Number(item.metrics.sales_opportunities || 0)}</td>
+                    <td>{Number(item.metrics.low_stock || 0)}</td>
+                  </tr>)}</tbody>
+                </table></div>
+              </section>
+            ) : null}
+            <footer className="sl-sheet-footer"><span>{window.location.origin}/reports</span><span>Summary</span></footer>
           </section>
 
           <section className="sl-report-sheet sl-interactions-sheet">
             <header className="sl-sheet-masthead">
               <span>{sl.generated_at ? new Date(sl.generated_at).toLocaleString() : formatBusinessDate(sl.report_date)}</span>
               <strong>{sl.brand}</strong>
-              <span>02 / 02</span>
+              <span>DAILY DETAILS</span>
             </header>
             <div className="sl-interactions-heading">
               <h2><span className="sl-section-mark sl-section-mark-blue" />Conversations &amp; transcripts</h2>
@@ -257,12 +330,13 @@ export function ReportView({ period }: { period: string }) {
                   <header>
                     <span className="sl-interaction-number">{item.number}</span>
                     <div className="sl-interaction-title">
-                      <strong>{item.time || 'Time unavailable'} · {item.location || sl.store_name}</strong>
+                      <strong>{item.time || 'Time unavailable'} · {item.store_name ? `${item.store_name} · ` : ''}{item.location || sl.store_name}</strong>
                       <small>{formatDuration(item.duration_seconds)} · {item.sentiment} · {item.opportunity_type || 'opportunity not classified'}</small>
                     </div>
                     <span className="sl-interaction-index">{item.number} of {sl.interactions.length}</span>
                   </header>
                   <blockquote>“{item.transcript_summary}”</blockquote>
+                  {allStoresReport && item.full_transcript ? <pre className="sl-full-transcript">{item.full_transcript}</pre> : null}
                   {(item.customer_needs?.length || item.products_discussed?.length) ? (
                     <div className="sl-interaction-tags">
                       {item.customer_needs?.map((need) => <span key={`need-${need}`}>Need: {need}</span>)}
@@ -278,7 +352,51 @@ export function ReportView({ period }: { period: string }) {
               ))}
               {!sl.interactions.length ? <p className="sl-no-interactions">No conversations were recorded for this business day.</p> : null}
             </div>
-            <footer className="sl-sheet-footer"><span>{window.location.origin}/reports</span><span>2 / 2</span></footer>
+            {allStoresReport ? (
+              <section className="sl-report-section sl-transactions-section">
+                <h2><span className="sl-section-mark" />Sales transactions</h2>
+                <p>Verified live POS transactions captured across the included stores.</p>
+                {sl.transactions?.length ? <div className="sl-table-scroll"><table className="sl-detail-table sl-transaction-table">
+                  <thead><tr><th>Time</th><th>Store</th><th>Items</th><th>Amount</th><th>POS source</th></tr></thead>
+                  <tbody>{sl.transactions.map((transaction) => <tr key={transaction.id}>
+                    <td>{transaction.occurred_at ? new Intl.DateTimeFormat(undefined, { timeZone: transaction.timezone, hour: '2-digit', minute: '2-digit' }).format(new Date(transaction.occurred_at)) : 'Time unavailable'}<small>{transaction.id}</small></td>
+                    <td>{transaction.store_name}</td>
+                    <td>{transaction.items.length ? transaction.items.map((item, index) => <span key={`${item.sku}-${index}`}>{item.quantity > 1 ? `${item.quantity} × ` : ''}{item.name}{item.sku ? ` (${item.sku})` : ''}{item.unit_price !== null ? ` · ${formatCurrency(item.unit_price, transaction.currency)}` : ''}{index < transaction.items.length - 1 ? ', ' : ''}</span>) : 'Item details unavailable'}</td>
+                    <td>{formatCurrency(transaction.amount, transaction.currency)}</td>
+                    <td>{transaction.provider}</td>
+                  </tr>)}</tbody>
+                </table></div> : <p>No verified live POS transactions were recorded.</p>}
+              </section>
+            ) : null}
+            {allStoresReport ? (
+              <section className="sl-report-section sl-transactions-section">
+                <h2><span className="sl-section-mark sl-section-mark-purple" />Opportunity and activity log</h2>
+                {sl.opportunities?.length ? <div className="sl-table-scroll"><table className="sl-detail-table">
+                  <thead><tr><th>Store</th><th>Activity / intent</th><th>Product</th><th>Status</th><th>Follow-up</th><th>Conversation</th></tr></thead>
+                  <tbody>{sl.opportunities.map((item) => <tr key={item.id}>
+                    <td>{item.store_name}</td>
+                    <td>{item.customer_intent || 'Opportunity recorded'}{item.manager_note ? <small>Review note: {item.manager_note}</small> : null}</td>
+                    <td>{item.product || 'Not specified'}</td>
+                    <td>{item.status}{item.confidence !== null ? <small>{Math.round(item.confidence * 100)}% confidence</small> : null}</td>
+                    <td>{item.recommendation || 'No follow-up recorded'}</td>
+                    <td>{item.conversation_id || 'Not linked'}</td>
+                  </tr>)}</tbody>
+                </table></div> : <p>No verified opportunities or activity records were available.</p>}
+              </section>
+            ) : null}
+            {allStoresReport && sl.low_stock_items?.length ? (
+              <section className="sl-report-section sl-transactions-section">
+                <h2><span className="sl-section-mark" />Low-stock inventory snapshot</h2>
+                <p>Inventory levels at report generation time.</p>
+                <div className="sl-table-scroll"><table className="sl-detail-table">
+                  <thead><tr><th>Store</th><th>SKU</th><th>Item</th><th>On hand</th><th>Par level</th></tr></thead>
+                  <tbody>{sl.low_stock_items.map((item, index) => <tr key={`${item.store_id}-${item.sku}-${index}`}>
+                    <td>{item.store_name}</td><td>{item.sku || '—'}</td><td>{item.name}</td><td>{item.quantity}</td><td>{item.par_level}</td>
+                  </tr>)}</tbody>
+                </table></div>
+              </section>
+            ) : null}
+            <footer className="sl-sheet-footer"><span>{window.location.origin}/reports</span><span>Details</span></footer>
           </section>
         </article>
       ) : data ? (

@@ -38,6 +38,7 @@ const intents = [];
 const dailyReports = [];
 const publishedEvents = [];
 const coachingContexts = [];
+const dailySummaryContexts = [];
 let testConfig;
 const stockItems = [];
 const storeRules = [];
@@ -296,14 +297,17 @@ before(async () => {
         provider: 'groq',
       };
     },
-    groqDailySummary: async () => ({
-      headline: 'Charger interest and one verified POS sale',
-      executive_summary: 'One conversation discussed a charger; one verified POS transaction was recorded.',
-      findings: ['A customer asked about a phone charger.'],
-      actions_for_tomorrow: ['Confirm charger compatibility when customers ask.'],
-      confidence: 0.9,
-      provider: 'groq',
-    }),
+    groqDailySummary: async (context) => {
+      dailySummaryContexts.push(context);
+      return {
+        headline: 'Charger interest and one verified POS sale',
+        executive_summary: 'One conversation discussed a charger; one verified POS transaction was recorded.',
+        findings: ['A customer asked about a phone charger.'],
+        actions_for_tomorrow: ['Confirm charger compatibility when customers ask.'],
+        confidence: 0.9,
+        provider: 'groq',
+      };
+    },
   });
   server = app.listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
@@ -1133,6 +1137,22 @@ test('daily reports use live evidence, persist provider output, and expose repor
   testConfig.demoMode = false;
   const businessDate = '2025-03-12';
   const occurredAt = new Date(`${businessDate}T12:00:00.000Z`);
+  const combinedStore = {
+    id: 'store-3',
+    organization_id: 'org-1',
+    name: 'South Store',
+    city: 'Austin',
+    region: 'TX',
+    timezone: 'America/Chicago',
+  };
+  stores.push(combinedStore);
+  stores.push({
+    id: 'store-4',
+    organization_id: 'org-2',
+    name: 'West Store',
+    city: 'Houston',
+    region: 'TX',
+  });
   conversations.push({
     id: 'conversation-daily-report-test',
     store_id: 'store-1',
@@ -1160,10 +1180,88 @@ test('daily reports use live evidence, persist provider output, and expose repor
     occurred_at: occurredAt,
     provider: 'stripe',
   });
+  conversations.push({
+    id: 'conversation-daily-report-store-3',
+    store_id: combinedStore.id,
+    data_source: 'live',
+    status: 'ENDED',
+    started_at: occurredAt,
+    ended_at: occurredAt,
+    primary_language: 'es',
+  });
+  transcriptSegments.push({
+    id: 'segment-daily-report-store-3',
+    conversation_id: 'conversation-daily-report-store-3',
+    speaker_id: 'speaker-customer',
+    language: 'es',
+    original_text: 'Busco unos auriculares.',
+    translated_text: 'I am looking for headphones.',
+    start_time: 2,
+    created_at: occurredAt,
+  });
+  aiRuns.push({
+    id: 'ai-run-daily-report-store-3',
+    conversation_id: 'conversation-daily-report-store-3',
+    provider: 'groq',
+    status: 'completed',
+    input_excerpt: '[conversation-report] headphones',
+    output_json: JSON.stringify({
+      kind: 'conversation_report',
+      report: {
+        summary: 'The customer is looking for headphones.',
+        customer_needs: ['Headphones'],
+        customer_sentiment: 'neutral',
+        products_discussed: ['Headphones'],
+        opportunity_type: 'potential',
+        opportunity_summary: 'The customer asked about headphones.',
+        recommendation: 'Confirm the requested features.',
+        evidence: 'The customer asked for headphones.',
+        confidence: 0.8,
+        provider: 'groq',
+      },
+    }),
+  });
+  opportunities.push({
+    id: 'opportunity-daily-report-store-3',
+    store_id: combinedStore.id,
+    conversation_id: 'conversation-daily-report-store-3',
+    customer_intent: 'Find wireless headphones',
+    product_name: 'Wireless headphones',
+    status: 'OPEN',
+    recommendation: 'Confirm desired features.',
+    manager_note: 'Follow up on stock.',
+    confidence: 0.8,
+    created_at: occurredAt,
+  });
+  stockItems.push({
+    id: 'stock-daily-report-store-3',
+    store_id: combinedStore.id,
+    sku: 'HEADPHONE-LOW',
+    name: 'Wireless headphones',
+    quantity: 0,
+    par_level: 2,
+  });
+  transactions.push({
+    id: 'transaction-daily-report-store-3',
+    store_id: combinedStore.id,
+    amount: 35,
+    currency: 'USD',
+    occurred_at: occurredAt,
+    provider: 'stripe',
+  });
+  transactionItems.push({
+    id: 'transaction-item-daily-report-store-3',
+    transaction_id: 'transaction-daily-report-store-3',
+    name: 'Wireless headphones',
+    sku: 'HEADPHONE-01',
+    quantity: 1,
+    unit_price: 35,
+  });
   const headers = {
     Authorization: `****** secret)}`,
     'content-type': 'application/json',
   };
+  const previousAdminStoreId = adminUser.store_id;
   try {
     headers.Authorization = `Bearer ${createAccessToken(user, secret)}`;
     const generated = await fetch(`${baseUrl}/api/v1/reports/daily/generate`, {
@@ -1184,6 +1282,54 @@ test('daily reports use live evidence, persist provider output, and expose repor
     assert.equal(fetched.status, 200);
     assert.equal((await fetched.json()).reportStatus, 'generated');
 
+    adminUser.store_id = null;
+    const orgAdminHeaders = {
+      Authorization: `Bearer ${createAccessToken(adminUser, secret)}`,
+      'content-type': 'application/json',
+    };
+    const combined = await fetch(`${baseUrl}/api/v1/reports/daily/generate`, {
+      method: 'POST',
+      headers: orgAdminHeaders,
+      body: JSON.stringify({ store_id: 'all', business_date: businessDate }),
+    });
+    const combinedPayload = await combined.json();
+    assert.equal(combined.status, 200, JSON.stringify(combinedPayload));
+    assert.equal(combinedPayload.store_id, 'all');
+    assert.equal(combinedPayload.scope, 'all_stores');
+    assert.equal(combinedPayload.metrics.conversations, 2);
+    assert.equal(combinedPayload.metrics.sales_count, 2);
+    assert.equal(dailySummaryContexts.at(-1).metrics.store_breakdown.length, 2);
+    assert.equal(combinedPayload.store_listener.store_breakdown.length, 2);
+    assert.equal(combinedPayload.store_listener.transactions.length, 2);
+    assert.equal(combinedPayload.store_listener.transactions[1].items[0].name, 'Wireless headphones');
+    assert.equal(combinedPayload.store_listener.opportunities[0].product, 'Wireless headphones');
+    assert.equal(combinedPayload.store_listener.low_stock_items[0].sku, 'HEADPHONE-LOW');
+    assert.equal(combinedPayload.store_listener.interactions[1].store_name, 'South Store');
+    assert.match(combinedPayload.store_listener.interactions[1].full_transcript, /I am looking for headphones/);
+    const combinedFetched = await fetch(`${baseUrl}/api/v1/reports/daily?store_id=all&business_date=${businessDate}`, {
+      headers: orgAdminHeaders,
+    });
+    assert.equal(combinedFetched.status, 200);
+    assert.equal((await combinedFetched.json()).reportStatus, 'generated');
+    const combinedHistory = await fetch(`${baseUrl}/api/v1/reports/history?store_id=all`, { headers: orgAdminHeaders });
+    assert.equal((await combinedHistory.json()).reports.some((row) => row.store_id === 'all'), true);
+    const foreignAdminHeaders = {
+      Authorization: `Bearer ${createAccessToken(foreignAdminUser, secret)}`,
+    };
+    const foreignCombined = await fetch(`${baseUrl}/api/v1/reports/daily?store_id=all&business_date=${businessDate}`, {
+      headers: foreignAdminHeaders,
+    });
+    assert.equal(foreignCombined.status, 200);
+    assert.equal((await foreignCombined.json()).reportStatus, 'not_generated');
+    const foreignHistory = await fetch(`${baseUrl}/api/v1/reports/history?store_id=all`, { headers: foreignAdminHeaders });
+    assert.equal((await foreignHistory.json()).reports.some((row) => row.store_id === 'all'), false);
+    const deniedCombined = await fetch(`${baseUrl}/api/v1/reports/daily/generate`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ store_id: 'all', business_date: businessDate }),
+    });
+    assert.equal(deniedCombined.status, 403);
+
     const weekly = await fetch(`${baseUrl}/api/v1/reports/weekly?store_id=store-1&business_date=${businessDate}`, { headers });
     const monthly = await fetch(`${baseUrl}/api/v1/reports/monthly?store_id=store-1&business_date=${businessDate}`, { headers });
     const weeklyPayload = await weekly.json();
@@ -1200,5 +1346,16 @@ test('daily reports use live evidence, persist provider output, and expose repor
     assert.equal(historyPayload.reports.some((row) => row.business_date === businessDate), true);
   } finally {
     testConfig.demoMode = true;
+    adminUser.store_id = previousAdminStoreId;
+    for (const rows of [stores, conversations, transcriptSegments, transactions, transactionItems, dailyReports, aiRuns, opportunities, stockItems]) {
+      for (let index = rows.length - 1; index >= 0; index -= 1) {
+        if (['store-3', 'store-4', 'conversation-daily-report-test', 'conversation-daily-report-store-3',
+          'segment-daily-report-test', 'segment-daily-report-store-3',
+          'transaction-daily-report-test', 'transaction-daily-report-store-3',
+          'transaction-item-daily-report-store-3',
+          'ai-run-daily-report-store-3', 'opportunity-daily-report-store-3', 'stock-daily-report-store-3',
+          `daily-store-1-${businessDate}`, `daily-all:${adminUser.organization_id}-${businessDate}`].includes(rows[index].id)) rows.splice(index, 1);
+      }
+    }
   }
 });

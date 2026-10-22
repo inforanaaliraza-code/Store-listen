@@ -519,7 +519,8 @@ export function createApp({
     const countByLanguage = {};
     for (const row of conversations) countByLanguage[row.primary_language || 'und'] = (countByLanguage[row.primary_language || 'und'] || 0) + 1;
     const durationSeconds = recordings.reduce((sum, row) => sum + Number(row.duration_seconds || 0), 0);
-    const lowStock = storeScopedStock.filter((item) => Number(item.quantity || 0) <= Number(item.par_level || 0)).length;
+    const lowStockItems = storeScopedStock.filter((item) => Number(item.quantity || 0) <= Number(item.par_level || 0));
+    const lowStock = lowStockItems.length;
     const payload = {
       range_start: start.toISOString(),
       range_end: rangeEnd.toISOString(),
@@ -570,7 +571,7 @@ export function createApp({
       caveat: 'AI-assisted metrics. Not a determination of employee performance.',
       dataMode: config.demoMode ? 'demo' : 'live',
     };
-    return { report: payload, conversations, segments, realOpportunities, transactions, recordings, runs, store };
+    return { report: payload, conversations, segments, realOpportunities, transactions, recordings, runs, lowStockItems, store };
   }
 
   function combineReportContexts(contexts, period) {
@@ -2842,12 +2843,20 @@ export function createApp({
     try {
       if (config.demoMode) return response.json({ reports: [] });
       const storeId = request.query.store_id ? String(request.query.store_id) : null;
-      if (storeId && !await accessibleStore(storeId, { user: request.user })) {
+      const allStores = storeId === 'all';
+      if (storeId && !allStores && !await accessibleStore(storeId, { user: request.user })) {
         return response.status(404).json({ detail: 'Store not found' });
       }
       const limit = Math.min(200, Math.max(1, Number.parseInt(request.query.limit || '60', 10) || 60));
-      const ids = storeId ? null : await visibleStoreIds(request.user);
-      const filter = storeId ? { store_id: storeId } : ids === null ? {} : { store_id: { $in: ids } };
+      const ids = allStores || !storeId ? await visibleStoreIds(request.user) : null;
+      if (allStores && ids !== null && ids.length < 2) {
+        return response.status(403).json({ detail: 'Combined reports require access to at least two stores.' });
+      }
+      const filter = allStores
+        ? {
+          store_id: `all:${request.user.role === 'SUPER_ADMIN' ? 'global' : request.user.organization_id}`,
+        }
+        : storeId ? { store_id: storeId } : ids === null ? {} : { store_id: { $in: ids } };
       const rows = await DailyReportModel.find(filter).sort({ generated_at: -1 }).limit(limit).lean();
       const visibleStores = await StoreModel.find(request.user.role === 'SUPER_ADMIN' ? {} : { organization_id: request.user.organization_id }).lean();
       const storeNames = new Map(visibleStores.map((store) => [store.id, store.name]));
@@ -2858,7 +2867,7 @@ export function createApp({
         if (!isLiveDailyReport(payload)) continue;
         reports.push({
           id: row.id,
-          store_id: row.store_id,
+          store_id: payload.scope === 'all_stores' ? 'all' : row.store_id,
           store_name: storeNames.get(row.store_id) || 'All stores',
           business_date: payload.business_date,
           generated_at: row.generated_at?.toISOString?.() || payload.generatedAt || null,
@@ -2879,11 +2888,25 @@ export function createApp({
       if (request.params.period === 'daily' && config.demoMode) {
         return response.status(503).json({ detail: 'Daily reports are disabled in demo mode. Set DEMO_MODE=false to use live records.' });
       }
-      const store = storeId ? await accessibleStore(storeId, { user: request.user }) : null;
-      if (storeId && !store) return response.status(404).json({ detail: 'Store not found' });
-      const businessDate = parseBusinessDate(request.query.business_date, store?.timezone);
-      if (request.params.period === 'daily' && store) {
-        const reportId = `daily-${store.id}-${businessDate}`;
+      const allStores = request.params.period === 'daily' && storeId === 'all';
+      const visibleIds = allStores ? await visibleStoreIds(request.user) : null;
+      if (allStores && visibleIds !== null && visibleIds.length < 2) {
+        return response.status(403).json({ detail: 'Combined reports require access to at least two stores.' });
+      }
+      const store = storeId && !allStores ? await accessibleStore(storeId, { user: request.user }) : null;
+      if (storeId && !allStores && !store) return response.status(404).json({ detail: 'Store not found' });
+      const reportStores = allStores
+        ? await StoreModel.find(visibleIds === null ? {} : { id: { $in: visibleIds } }).sort({ name: 1 }).lean()
+        : store ? [store] : [];
+      if (allStores && reportStores.length < 2) {
+        return response.status(403).json({ detail: 'Combined reports require access to at least two stores.' });
+      }
+      const reportStore = allStores ? reportStores[0] : store;
+      const businessDate = parseBusinessDate(request.query.business_date, reportStore?.timezone);
+      if (request.params.period === 'daily' && (store || allStores)) {
+        const combinedScope = request.user.role === 'SUPER_ADMIN' ? 'global' : request.user.organization_id;
+        const reportStoreId = allStores ? `all:${combinedScope}` : store.id;
+        const reportId = `daily-${reportStoreId}-${businessDate}`;
         const saved = await DailyReportModel.findOne({ id: reportId }).lean();
         if (saved) {
           try {
@@ -2893,10 +2916,12 @@ export function createApp({
           } catch { return response.status(500).json({ detail: 'Saved daily report data is invalid. Generate the report again.' }); }
         }
       }
-      const storeIds = store ? null : await visibleStoreIds(request.user);
+      const storeIds = store ? null : allStores ? visibleIds : await visibleStoreIds(request.user);
       const stores = store
         ? [store]
-        : await StoreModel.find(storeIds === null ? {} : { id: { $in: storeIds } }).lean();
+        : allStores
+          ? reportStores
+          : await StoreModel.find(storeIds === null ? {} : { id: { $in: storeIds } }).lean();
       const contexts = await Promise.all(stores.map((item) => dailyReportContext(item, businessDate, request.params.period)));
       const report = combineReportContexts(contexts, request.params.period);
       return response.json({
@@ -2904,7 +2929,7 @@ export function createApp({
         ...(request.params.period === 'daily' ? { reportStatus: 'not_generated' } : {}),
         generatedAt: new Date().toISOString(),
         pos_provider: config.posProvider,
-        ...(store ? { store_name: store.name } : {}),
+        ...(store ? { store_name: store.name } : allStores ? { store_id: 'all', store_name: 'All stores', scope: 'all_stores' } : {}),
         ...report,
       });
     } catch (error) { return next(error); }
@@ -2919,12 +2944,61 @@ export function createApp({
         return response.status(503).json({ detail: 'Daily reports are disabled in demo mode. Set DEMO_MODE=false to use live records.' });
       }
       const storeId = requiredText(request.body, 'store_id', 64);
-      const store = await accessibleStore(storeId, { user: request.user });
-      if (!store) return response.status(404).json({ detail: 'Store not found' });
+      const allStores = storeId === 'all';
+      let stores;
+      if (allStores) {
+        const visibleIds = await visibleStoreIds(request.user);
+        stores = await StoreModel.find(visibleIds === null ? {} : { id: { $in: visibleIds } }).sort({ name: 1 }).lean();
+        if (stores.length < 2) return response.status(403).json({ detail: 'Combined reports require access to at least two stores.' });
+      } else {
+        const store = await accessibleStore(storeId, { user: request.user });
+        if (!store) return response.status(404).json({ detail: 'Store not found' });
+        stores = [store];
+      }
+      const store = allStores
+        ? { id: 'all', name: 'All stores', timezone: stores[0]?.timezone || 'UTC' }
+        : stores[0];
       const businessDate = parseBusinessDate(request.body.business_date, store.timezone);
-      const reportId = `daily-${store.id}-${businessDate}`;
-      const context = await dailyReportContext(store, businessDate);
-      const { report, conversations, segments, transactions, recordings, runs, realOpportunities } = context;
+      const combinedScope = request.user.role === 'SUPER_ADMIN' ? 'global' : request.user.organization_id;
+      const reportStoreId = allStores ? `all:${combinedScope}` : store.id;
+      const reportId = `daily-${reportStoreId}-${businessDate}`;
+      const contexts = await Promise.all(stores.map((item) => dailyReportContext(item, businessDate)));
+      const report = combineReportContexts(contexts, 'daily');
+      const conversations = contexts.flatMap((context) => context.conversations);
+      const segments = contexts.flatMap((context) => context.segments);
+      const transactions = contexts.flatMap((context) => context.transactions);
+      const recordings = contexts.flatMap((context) => context.recordings);
+      const runs = contexts.flatMap((context) => context.runs);
+      const realOpportunities = contexts.flatMap((context) => context.realOpportunities);
+      const storesById = new Map(stores.map((item) => [item.id, item]));
+      const storeTimezones = new Map(contexts.map((context) => [context.store.id, context.report.timezone]));
+      const storeBreakdown = contexts.map((context) => ({
+        store_id: context.store.id,
+        store_name: context.store.name,
+        location: [context.store.city, context.store.region].filter(Boolean).join(', '),
+        metrics: context.report.metrics,
+      }));
+      const opportunityDetails = contexts.flatMap((context) => context.realOpportunities.map((opportunity) => ({
+        id: opportunity.id,
+        store_id: context.store.id,
+        store_name: context.store.name,
+        conversation_id: opportunity.conversation_id || null,
+        customer_intent: opportunity.customer_intent || '',
+        product: opportunity.product_name || '',
+        status: opportunity.status || 'UNKNOWN',
+        recommendation: opportunity.recommendation || '',
+        manager_note: opportunity.manager_note || '',
+        confidence: Number.isFinite(Number(opportunity.confidence)) ? Number(opportunity.confidence) : null,
+        created_at: opportunity.created_at?.toISOString?.() || null,
+      })));
+      const lowStockDetails = contexts.flatMap((context) => context.lowStockItems.map((item) => ({
+        store_id: context.store.id,
+        store_name: context.store.name,
+        sku: item.sku || '',
+        name: item.name || 'Unnamed item',
+        quantity: Number(item.quantity) || 0,
+        par_level: Number(item.par_level) || 0,
+      })));
       if (!report.metrics.conversations && !report.metrics.sales_data_available) {
         return response.status(409).json({ detail: 'No live conversations or real POS transactions are available for this business date.' });
       }
@@ -2942,17 +3016,21 @@ export function createApp({
         transcript: (transcriptByConversation.get(conversation.id) || []).join(' ').slice(0, 1200),
       })).filter((item) => item.transcript).slice(0, 30);
       if (!config.groqApiKey) return response.status(503).json({ detail: 'Daily AI reports are not configured. Set GROQ_API_KEY on the backend service.' });
+      const summaryMetrics = allStores
+        ? { ...report.metrics, store_breakdown: storeBreakdown }
+        : report.metrics;
       const summary = await groqDailySummary({
         apiKey: config.groqApiKey,
         model: config.groqModel,
         businessDate,
         store: {
-          name: store.name,
+          name: allStores ? 'All stores' : store.name,
+          stores: allStores ? storeBreakdown.map(({ store_name, location }) => ({ name: store_name, location })) : undefined,
           city: store.city || '',
           region: store.region || '',
           timezone: store.timezone || 'UTC',
         },
-        metrics: report.metrics,
+        metrics: summaryMetrics,
         evidence,
       });
       if (!summary?.headline || !summary?.executive_summary
@@ -2984,6 +3062,34 @@ export function createApp({
         return `${symbols[currency] || `${currency} `}${formatted}`;
       };
       const revenueEntries = Object.entries(report.metrics.revenue_by_currency || {});
+      const transactionItems = transactions.length && PosTransactionItemModel?.find
+        ? await PosTransactionItemModel.find({ transaction_id: { $in: transactions.map((item) => item.id) } }).lean()
+        : [];
+      const transactionItemsById = new Map();
+      for (const item of transactionItems) {
+        const items = transactionItemsById.get(item.transaction_id) || [];
+        items.push({
+          name: item.name || 'Item',
+          sku: item.sku || '',
+          quantity: Number(item.quantity) || 1,
+          unit_price: Number.isFinite(Number(item.unit_price)) ? Number(item.unit_price) : null,
+        });
+        transactionItemsById.set(item.transaction_id, items);
+      }
+      const transactionDetails = transactions.map((transaction) => {
+        const transactionStore = storesById.get(transaction.store_id);
+        return {
+          id: transaction.id,
+          store_id: transaction.store_id,
+          store_name: transactionStore?.name || transaction.store_id,
+          occurred_at: transaction.occurred_at?.toISOString?.() || null,
+          timezone: storeTimezones.get(transaction.store_id) || 'UTC',
+          amount: Number(transaction.amount) || 0,
+          currency: transaction.currency || 'USD',
+          provider: transaction.provider || 'live',
+          items: transactionItemsById.get(transaction.id) || [],
+        };
+      });
       const totalRevenue = revenueEntries.reduce((sum, [, amount]) => sum + Number(amount || 0), 0);
       const revenueValue = !report.metrics.sales_data_available
         ? 'N/A'
@@ -2998,8 +3104,16 @@ export function createApp({
             ? 'Multiple currencies'
             : formatMoney(totalRevenue / report.metrics.sales_count, revenueEntries[0]?.[0] || 'USD');
       const interactions = conversations.map((conversation, index) => {
+        const conversationStore = storesById.get(conversation.store_id) || store;
         const conversationSegments = segments.filter((segment) => segment.conversation_id === conversation.id);
         const transcript = (transcriptByConversation.get(conversation.id) || []).slice(0, 12).join(' ').slice(0, 280);
+        const fullTranscript = conversationSegments.map((segment) => {
+          const speaker = segment.speaker_id === 'speaker-customer'
+            ? 'Customer'
+            : String(segment.speaker_id || '').startsWith('speaker-employee-') ? 'Employee' : 'Speaker';
+          const text = englishTranscriptText(segment) || String(segment.original_text || '').trim();
+          return text ? `${speaker}: ${text}` : '';
+        }).filter(Boolean).join('\n');
         const conversationReport = reportByConversation.get(conversation.id) || {};
         const statuses = new Set(realOpportunities
           .filter((opportunity) => opportunity.conversation_id === conversation.id)
@@ -3016,7 +3130,7 @@ export function createApp({
         if (startedAt && !Number.isNaN(startedAt.getTime())) {
           try {
             time = new Intl.DateTimeFormat('en-US', {
-              timeZone: report.timezone,
+              timeZone: storeTimezones.get(conversation.store_id) || report.timezone,
               hour: '2-digit',
               minute: '2-digit',
             }).format(startedAt);
@@ -3025,7 +3139,9 @@ export function createApp({
         return {
           number: index + 1,
           time,
-          location: [store.city, store.region].filter(Boolean).join(', ') || store.name,
+          location: [conversationStore.city, conversationStore.region].filter(Boolean).join(', ') || conversationStore.name,
+          store_name: conversationStore.name,
+          ...(allStores ? { full_transcript: fullTranscript } : {}),
           duration_seconds: Math.round((endSeconds || capturedDuration) * 10) / 10,
           sentiment,
           confidence: Number.isFinite(Number(conversationReport.confidence)) ? Math.min(1, Math.max(0, Number(conversationReport.confidence))) : null,
@@ -3060,7 +3176,9 @@ export function createApp({
         revenue: {
           label: 'REVENUE',
           value: revenueValue,
-          detail: report.metrics.sales_data_available ? `${report.metrics.sales_count} POS transaction(s)` : 'Live POS data unavailable.',
+          detail: report.metrics.sales_data_available
+            ? `${report.metrics.sales_count} verified POS transaction(s)${allStores ? ` · ${contexts.filter((context) => context.report.metrics.sales_data_available).length}/${stores.length} stores with data` : ''}`
+            : 'Live POS data unavailable.',
         },
         conversations: { label: 'CONVERSATIONS', value: String(report.metrics.conversations), detail: 'Recorded interactions' },
         avg_ticket: {
@@ -3077,7 +3195,11 @@ export function createApp({
         report_date: businessDate,
         headline: String(summary.headline || `${report.metrics.conversations || 'No'} conversations · ${revenueValue} POS sales`).slice(0, 240),
         store_name: store.name,
-        store_location: [store.city, store.region].filter(Boolean).join(', '),
+        store_location: allStores ? `${stores.length} stores` : [store.city, store.region].filter(Boolean).join(', '),
+        store_breakdown: allStores ? storeBreakdown : undefined,
+        transactions: allStores ? transactionDetails : undefined,
+        opportunities: allStores ? opportunityDetails : undefined,
+        low_stock_items: allStores ? lowStockDetails : undefined,
         generated_at: generatedAt,
         kpis,
         executive_summary: executiveSummary,
@@ -3097,6 +3219,7 @@ export function createApp({
         pos_provider: config.posProvider,
         store_id: store.id,
         store_name: store.name,
+        scope: allStores ? 'all_stores' : 'store',
         store_listener: storeListener,
         metrics: report.metrics,
         daily_analysis: {
@@ -3118,7 +3241,7 @@ export function createApp({
       } else {
         await DailyReportModel.create({
           id: reportId,
-          store_id: store.id,
+          store_id: reportStoreId,
           period: 'daily',
           payload_json: JSON.stringify(payload),
           generated_at: new Date(generatedAt),
